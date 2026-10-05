@@ -1,0 +1,43 @@
+# The Godot editor is the first GUI tool that authors files into this repo, and
+# it rewrites project.godot, export_presets.cfg and every .tscn/.tres on its own
+# schedule. The root .gitattributes was written before that was true, so this
+# file names the types a Godot project introduces rather than leaving them to
+# `* text=auto`'s heuristic.
+#
+# Everything here is consumed by a Linux build stage. A CRLF in project.godot or
+# export_presets.cfg is parsed by Godot's ConfigFile as part of the value, which
+# turns a preset name into a name-with-a-carriage-return and fails the export
+# with an error that points at the wrong thing.
+
+*.godot     text eol=lf
+*.tscn      text eol=lf
+*.tres      text eol=lf
+*.gd        text eol=lf
+*.gdshader  text eol=lf
+*.cfg       text eol=lf
+*.import    text eol=lf
+*.json      text eol=lf
+*.svg       text eol=lf
+
+# Godot 4.4+ writes a sidecar .uid next to every script and imported resource.
+# They are one-line text files and they belong in git -- a missing uid makes the
+# editor mint a new one, which rewrites every file that referenced the old one.
+*.uid       text eol=lf
+
+# Asset types a Godot project brings with it. None are used today -- the shell
+# deliberately imports zero resources (see README.md) -- but a heuristic that
+# guesses wrong on a font or an ogg corrupts it silently and the failure surfaces
+# as a crash inside the engine, nowhere near the commit that caused it.
+*.ttf       binary
+*.otf       binary
+*.woff      binary
+*.woff2     binary
+*.wav       binary
+*.ogg       binary
+*.mp3       binary
+*.webp      binary
+*.jpg       binary
+*.jpeg      binary
+*.res       binary
+*.ctex      binary
+*.pck       binary

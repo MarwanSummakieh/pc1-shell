@@ -1,0 +1,134 @@
+; MarwanOS shell -- Godot project settings.
+;
+; Godot rewrites this file whenever a setting changes in the editor, and its
+; writer does not preserve comments. Everything load-bearing below is repeated in
+; README.md so the reasoning survives an editor save.
+
+config_version=5
+
+[application]
+
+config/name="MarwanOS Shell"
+config/description="PC1 controller-first desktop, browser, files and applications."
+run/main_scene="res://scenes/shell_root.tscn"
+
+; Tracks the Containerfile's GODOT_VERSION, currently 4.7.1. The floor is 4.5,
+; below which Godot's headless CLI export is not trustworthy -- --export-release
+; could exit 0 on a failed export until 4.3, and the exporter could crash while
+; still writing a plausible-looking binary until 4.5. The editor rewrites this tag
+; to whatever version opened the project, so it is also the cheapest signal that
+; someone edited the shell with an engine the image does not pin.
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+; The engine's own boot splash is a Godot logo on a white field. M2's acceptance
+; test is a frame-by-frame camera recording with zero frames of anything but the
+; plymouth splash and the shell, so this is turned off rather than themed.
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.078431, 0.086275, 0.101961, 1)
+
+; stdout is a pipe into the journal -- marwanos-session re-execs itself through
+; `systemd-cat` and the client inherits those descriptors -- and a pipe is
+; block-buffered. Without this, a release build holds log lines until the buffer
+; fills or the process dies. On a machine whose only debugging surface is
+; `journalctl`, that is the difference between a diagnosable crash and a black
+; screen. Release builds default this to false; debug builds already flush.
+run/flush_stdout_on_print=true
+
+[autoload]
+
+; Order is load-bearing only in that ShellLog must exist before anything logs.
+; Autoloads are added to the scene root in the order listed here.
+ShellLog="*res://src/shell_log.gd"
+Kiosk="*res://src/kiosk.gd"
+ShellInput="*res://src/shell_input.gd"
+ControllerRouter="*res://src/controller_router.gd"
+PlayerOne="*res://src/player_one.gd"
+FocusRepeat="*res://src/focus_repeat.gd"
+SystemStatus="*res://src/system_status.gd"
+Notifications="*res://src/notifications.gd"
+Installed="*res://src/installed.gd"
+Services="*res://src/services.gd"
+Apps="*res://src/apps.gd"
+Wifi="*res://src/wifi.gd"
+Audio="*res://src/audio.gd"
+Updates="*res://src/updates.gd"
+DisplayProfile="*res://src/display.gd"
+WindowProfile="*res://src/window_profile.gd"
+Media="*res://src/media.gd"
+Launcher="*res://src/launcher.gd"
+Settings="*res://src/settings.gd"
+Power="*res://src/power.gd"
+Info="*res://src/info.gd"
+; Last, and the order matters: setup.gd's open() guards against Settings, Power
+; and Info, so all three must already exist when it loads.
+Setup="*res://src/setup.gd"
+WindowsInstall="*res://src/windows_install.gd"
+Files="*res://src/files.gd"
+Browser="*res://src/browser.gd"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+
+; Window.MODE_FULLSCREEN (3), not MODE_EXCLUSIVE_FULLSCREEN (4). Exclusive asks
+; the display server for a videomode change, which under gamescope or cage is the
+; compositor's job and not the client's -- gamescope has already negotiated a mode
+; with the TV and written it to modes.cfg.
+window/size/mode=3
+window/size/borderless=true
+
+; Required before Kiosk.set_overlay can make the window see-through. Godot
+; refuses transparent_bg at runtime unless this is allowed at startup, and the
+; app overlay's entire premise is that the RUNNING application shows through
+; the middle of it (see app_overlay.gd and Kiosk's overlay switch).
+;
+; It costs nothing while the shell is opaque: the window is only made
+; transparent for as long as the overlay is up.
+window/per_pixel_transparency/allowed=true
+
+; One fixed 1920x1080 design surface, scaled to whatever the display negotiated.
+; Every margin and type size in src/tv_theme.gd is expressed against it, so the
+; 5% safe inset stays 5% at any output resolution instead of shrinking on a 4K
+; panel.
+;
+; aspect=expand, NOT keep, and the 2026-08-07 hardware boot is why. The target
+; is a 3440x1440 ultrawide (21:9). Under "keep" the shell drew 2560x1440 with a
+; 440 px black bar down each side -- a quarter of the panel unused, and the
+; journal said so in as many words ("stretch: drawing 2560x1440 with a 440 px
+; black bar each side"). "expand" keeps the 1080 design height and hands the
+; extra width to the layout instead of to bars, so the design surface becomes
+; ~2580x1080 on this panel and the rail simply shows more cards. Every screen
+; is built from anchors and containers against the safe inset, so nothing needs
+; to know the width changed.
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+; display/display_server/driver.linuxbsd is deliberately absent, i.e. left at the
+; default. Godot falls back in both directions -- an X11 project uses Wayland when
+; X11 is unavailable, and vice versa -- so one export is correct under both plans
+; D4 is still choosing between: under gamescope the session exports DISPLAY and no
+; WAYLAND_DISPLAY, so the shell lands on XWayland (the path
+; --force-windows-fullscreen actually manages); under cage, WAYLAND_DISPLAY is set
+; and Fedora 43's cage does not depend on Xwayland at all. Pinning the driver
+; would break whichever plan it was not pinned for.
+;
+; Measured 2026-08-05, correcting the sentence above: with cage running, the shell
+; still reported server "X11". Fedora 43's cage ships Xwayland and Godot's linuxbsd
+; driver order puts x11 first, so DISPLAY exists under plan B too and the shell
+; lands on XWayland under BOTH plans. Kiosk logs the server name every boot, which
+; is what would catch this changing.
+
+[gui]
+
+; A floor, not a target. Godot's default is 16px, which is unreadable at three
+; metres. Raising the default means a control that forgets to override its font
+; size renders too large rather than invisibly small.
+theme/default_font_size=30
+
+[rendering]
+
+; Matches TvTheme.BACKGROUND. The clear colour is what shows during the first
+; frames and behind a hidden scene, and a default light-grey flash would be a
+; text-free but very visible failure of M2's camera test.
+environment/defaults/default_clear_color=Color(0.078431, 0.086275, 0.101961, 1)

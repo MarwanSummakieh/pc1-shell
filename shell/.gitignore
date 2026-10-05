@@ -1,0 +1,14 @@
+# Godot's import cache and editor scratch state. The image build regenerates it
+# with `godot --headless --path shell --import` before every export, so a stale
+# copy in git could only ever disagree with the build.
+.godot/
+
+# Per-machine project setting overrides. Godot reads this before project.godot
+# and it exists specifically so a developer can change settings without touching
+# the tracked file -- which is the opposite of something that should be tracked.
+override.cfg
+
+# project.godot and export_presets.cfg are NOT ignored, deliberately.
+# `--export-release linux` resolves that preset out of export_presets.cfg by
+# name, so losing the file breaks the image build with an error that points at
+# the export step rather than at the missing file.

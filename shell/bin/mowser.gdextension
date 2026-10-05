@@ -1,0 +1,40 @@
+; How the shell finds mowser.
+;
+; A res:// PATH, WHICH GODOT'S EXPORTER REQUIRES AND WHICH IS NOT WHERE THE
+; LIBRARY ENDS UP. Both halves of that were learned by building it wrong.
+;
+; An absolute path here fails the EXPORT outright: the exporter does not merely
+; record this string, it opens the file and COPIES it next to the exported
+; binary ("Failed to copy shared object", and the export aborts). So the
+; library has to exist inside the project at export time, which is why the
+; Containerfile stages it into shell/bin before exporting.
+;
+; And it cannot stay in the pack: the shell exports with embed_pck=true -- one
+; file, no sibling .pck -- and a GDExtension is opened by the dynamic linker,
+; which cannot open a member of a pack file. Godot's answer is the copy above:
+; at runtime the extension is loaded from BESIDE marwanos-shell, not from
+; res:// at all. The image therefore installs libmowser.so into the shell's own
+; directory, and this line is the export-time spelling of a runtime fact.
+;
+; WHICH LEAVES libcef.so, 256 MB of engine that lives with the rest of the
+; payload in /usr/lib/marwanos/mowser and is deliberately NOT on the system
+; library path. The extension is linked with RUNPATH=/usr/lib/marwanos/mowser
+; -- an absolute rpath rather than $ORIGIN, precisely because $ORIGIN is
+; whichever directory Godot decided to stage the copy in, and the engine is
+; somewhere else on purpose.
+;
+; compatibility_minimum is the engine version whose GDExtension interface this
+; was built against, which here is not a guess: godot-cpp is generated from the
+; extension_api.json that THIS repo's pinned Godot binary dumps at build time.
+
+[configuration]
+
+entry_symbol = "mowser_library_init"
+compatibility_minimum = 4.7
+
+[libraries]
+
+; One target, because this image ships one architecture and one build.
+linux.x86_64 = "res://bin/libmowser.so"
+linux.debug.x86_64 = "res://bin/libmowser.so"
+linux.release.x86_64 = "res://bin/libmowser.so"

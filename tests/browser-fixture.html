@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>PC1 browser ready</title>
+<style>
+body { margin: 0; min-height: 2400px; background: #dae9f0; color: #132c39; font: 28px sans-serif; }
+h1 { margin: 32px; }
+input { position: absolute; left: 32px; top: 120px; width: 500px; height: 60px; font: inherit; }
+button { position: absolute; left: 32px; top: 240px; width: 500px; height: 70px; font: inherit; }
+a { position: absolute; left: 32px; top: 360px; }
+</style>
+<h1>PC1 browser</h1>
+<input id="text" aria-label="Test text" oninput="document.title = 'Typed:' + this.value">
+<button onclick="document.title = 'PC1 clicked'">Test click</button>
+<a href="#second">Test navigation</a>
+<input type="password" aria-label="Test password" style="top:400px" oninput="document.title='Password length:'+this.value.length">
+<input type="email" aria-label="Email" enterkeyhint="next" style="top:500px">
+<input type="text" inputmode="numeric" aria-label="Code" style="top:600px">
+<input type="search" aria-label="Find on this page" style="top:700px" onkeydown="if(event.key==='Enter'){event.preventDefault();document.title='Search submitted'}">
+<script>addEventListener('scroll', () => document.title = 'Right stick scrolled', {once:true})</script>
+</html>
