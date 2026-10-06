@@ -369,12 +369,7 @@ func _build_view() -> Control:
 	var view: Control = ClassDB.instantiate("MowserView")
 	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	view.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if view.has_method("set_download_directory"):
-		var directory := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
-		if directory.is_empty():
-			directory = OS.get_environment("HOME").path_join("Downloads")
-		view.set_download_directory(directory)
-		view.download_updated.connect(_on_download_updated.bind(view))
+	_configure_downloads(view)
 	view.page_started.connect(func(url: String):
 		if view == _view: _on_page_started(url))
 	view.page_finished.connect(func(url: String, status: int):
@@ -397,6 +392,18 @@ func _build_view() -> Control:
 		view.popup_requested.connect(func(url: String):
 			if visible: _new_tab(url))
 	return view
+
+
+static func download_directory() -> String:
+	# The player-owned installer worker and FDM accept this exact root. XDG can
+	# return HOME when user-dirs.dirs is absent, or a custom directory outside it.
+	return OS.get_environment("HOME").path_join("Downloads")
+
+
+func _configure_downloads(view: Control) -> void:
+	if view.has_method("set_download_directory"):
+		view.set_download_directory(download_directory())
+		view.download_updated.connect(_on_download_updated.bind(view))
 
 
 ## A page-shaped panel saying why there is no page. Same first-class-render rule
@@ -1001,9 +1008,7 @@ func _open_downloads() -> void:
 func _open_download_folder() -> void:
 	if _picker != null: return
 	_picker = load("res://src/files_screen.gd").new()
-	var directory := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
-	if directory.is_empty(): directory = OS.get_environment("HOME").path_join("Downloads")
-	_picker.initial_directory = directory
+	_picker.initial_directory = download_directory()
 	_picker.closed.connect(_finish_picker)
 	add_child(_picker)
 	set_process_unhandled_input(false)
