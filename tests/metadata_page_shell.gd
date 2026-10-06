@@ -53,6 +53,7 @@ func _run() -> void:
 	check(details._rows.size() == 1 and details._rows[0].get_meta("details_key") == "play", "Details retains exactly one Play action")
 	check(root.gui_get_focus_owner() == page._rows[0] and page._rows[0].get_meta("metadata_key") == "refresh", "metadata starts on controller Refresh")
 	check(page._source.text == "Source: Steam Store · App 1778820", "current provider and match are visible")
+	check(page._heading.is_visible_in_tree() and page._heading.size.y > 0, "Metadata heading has visible positive height")
 	await press("ui_accept")
 	check(requests().size() == 1 and requests()[0] == {"action": "refresh", "game_id": GAME_ID}, "controller Refresh writes the real current-game metadata request")
 	await press("ui_accept")
@@ -85,5 +86,24 @@ func _run() -> void:
 	details.get_parent().remove_child(details)
 	details.queue_free()
 	await process_frame
+	update_record({"title": "TEKKEN 8", "status": "ready", "provider": "Steam Store", "provider_id": "1778820", "candidates": []})
+	for native in [Vector2i(1280, 720), Vector2i(1920, 1080), Vector2i(3440, 1440)]:
+		var viewport := SubViewport.new()
+		viewport.size = native
+		viewport.size_2d_override = Vector2i(2580, 1080) if native.x == 3440 else Vector2i(1920, 1080)
+		viewport.size_2d_override_stretch = true
+		root.add_child(viewport)
+		var layout: Control = load("res://src/metadata_page.gd").new()
+		layout.entry = {"id": GAME_ID, "title": "TEKKEN 8"}
+		viewport.add_child(layout)
+		for frame in 5:
+			await process_frame
+		var heading: Rect2 = layout._heading.get_global_rect()
+		check(layout._heading.is_visible_in_tree() and heading.size.y > 0 and heading.size.x > 0, "Metadata heading is visible at %s" % native)
+		check(heading.position.x >= 0 and heading.position.y >= 0 and heading.end.x <= layout.size.x and heading.end.y <= layout.size.y, "Metadata heading stays inside the page at %s" % native)
+		check(heading.end.y <= layout._source.get_global_rect().position.y, "Metadata heading does not overlap its provider at %s" % native)
+		check(viewport.gui_get_focus_owner() == layout._rows[0], "Refresh keeps initial focus at %s" % native)
+		viewport.queue_free()
+		await process_frame
 	print("Metadata page shell checks: %d failure(s)" % failures)
 	quit(1 if failures else 0)

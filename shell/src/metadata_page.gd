@@ -35,6 +35,7 @@ func _ready() -> void:
 	column.add_theme_constant_override("separation", 24)
 	safe.add_child(column)
 	_heading = _label(column, TvTheme.SIZE_HERO_TITLE)
+	_heading.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_source = _label(column, TvTheme.SIZE_BODY)
 	_message = _label(column, TvTheme.SIZE_BODY)

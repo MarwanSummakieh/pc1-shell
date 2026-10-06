@@ -13,24 +13,24 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func press(button: int) -> void:
-	var event := InputEventJoypadButton.new()
-	event.device = 0
-	event.button_index = button
-	event.pressed = true
-	Input.parse_input_event(event)
+	var router := root.get_node("ControllerRouter")
+	var buttons: Array = router._buttons.duplicate()
+	buttons[button] = true
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": buttons, "axes": router._axes.duplicate()})
 	await process_frame
-	event = event.duplicate()
-	event.pressed = false
-	Input.parse_input_event(event)
+	buttons[button] = false
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": buttons, "axes": router._axes.duplicate()})
 	await process_frame
 	await process_frame
 
 func trigger(axis: int, value: float) -> void:
-	var event := InputEventJoypadMotion.new()
-	event.device = 0
-	event.axis = axis
-	event.axis_value = value
-	Input.parse_input_event(event)
+	var router := root.get_node("ControllerRouter")
+	var axes: Array = router._axes.duplicate()
+	axes[axis] = value
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": router._buttons.duplicate(), "axes": axes})
 	await process_frame
 
 func paste_one(source: String, destination: String, cut: bool) -> Dictionary:
@@ -46,7 +46,16 @@ func paste_one(source: String, destination: String, cut: bool) -> Dictionary:
 	return {"error": "", "name": str(job.completed[0]["name"])} if not job.completed.is_empty() else {"error": "Transfer did not finish"}
 
 func _run() -> void:
-	root.get_node("PlayerOne").device = 0
+	# Feed the real broker-state seam, as controller_shell.gd does. A synthetic
+	# native index has no GUID and is correctly evicted by PlayerOne's timer.
+	# Only UDP transport is paused; input ownership/reconciliation stay enabled.
+	var router := root.get_node("ControllerRouter")
+	router.set_process(false)
+	router._routed = true
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": [false, false, false, false, false, false, false, false,
+			false, false, false, false, false, false, false],
+		"axes": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]})
 	var home := OS.get_environment("PC1_TOOLS_TEST_HOME")
 	var shell: Control = load("res://scenes/shell_root.tscn").instantiate()
 	root.add_child(shell)
