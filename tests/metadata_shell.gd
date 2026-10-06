@@ -49,7 +49,7 @@ func _run() -> void:
 	check(screen._rows.size() == 1 and screen._rows[0].get_meta("details_key") == "play", "Play is the only details action")
 	service.games[original.id].status = "needs-match"
 	service.games[original.id].candidates = [{"title": "Other Tekken", "provider_id": "123"}]
-	service.changed.emit()
+	screen._refresh()
 	await process_frame
 	check(screen._rows.size() == 1, "ambiguous metadata does not add extra buttons")
 	check(root.get_viewport().gui_get_focus_owner() == screen._rows[0], "metadata update retains Play focus")
