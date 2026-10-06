@@ -18,11 +18,8 @@ extends Control
 ## CAME FROM, which is the entire point of putting the seam there. Only card.gd
 ## looks, and only to print a caption.
 ##
-## WHAT DID NOT COME BACK: the full-bleed hero artwork behind the rail, its
-## crossfade, its cache and its debounce -- about 400 lines whose whole job was
-## to repaint the screen behind the selection. The accent wash on each card is
-## what is left of it, and it is derived from the id rather than sampled from a
-## picture, so it needs no artwork to exist.
+## Metadata supplies the selected game's title, facts, description and backdrop.
+## The bounded artwork cache keeps selection changes from retaining every image.
 ##
 ## TWO INVARIANTS, and they outlived the rail's absence so they are written
 ## here rather than left implicit:
@@ -51,6 +48,8 @@ const AppOverlay = preload("res://src/app_overlay.gd")
 const ListMenu = preload("res://src/list_menu.gd")
 const ErrorScreen = preload("res://src/error_screen.gd")
 const GameDetails = preload("res://src/game_details.gd")
+const GameSummary = preload("res://src/game_summary.gd")
+const Icons = preload("res://src/icons.gd")
 const ProcessPill = preload("res://src/process_pill.gd")
 const ProcessMenu = preload("res://src/process_menu.gd")
 const StatusCorner = preload("res://src/status_corner.gd")
@@ -64,6 +63,11 @@ const StatusCorner = preload("res://src/status_corner.gd")
 const BAR_RETURN_GRACE_MSEC := 550
 
 var _hero: ColorRect = null
+var _hero_art: TextureRect = null
+var _hero_art_path := ""
+var _hero_art_cache: Dictionary = {}
+var _game_summary: GameSummary = null
+var _summary_row: Control = null
 
 ## The rows a fullscreen sheet covers, hidden together rather than painted over
 ## -- see _set_lower_deck_visible. `_title_block` is the empty-library sentence
@@ -243,10 +247,13 @@ func _build() -> void:
 	_hero.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_hero)
 
-	# The hero art layer went with the rail: a picture of the selected entry
-	# needs a selected entry, and there is no library to select from until the
-	# sources land. The wash above stays, so the screen is a deliberate colour
-	# rather than an accident.
+	_hero_art = TextureRect.new()
+	_hero_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_hero_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_hero_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_hero_art.modulate = Color(1, 1, 1, 0.28)
+	_hero_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_hero_art)
 
 	# Darkens the lower part of the surface so the title and rail keep their
 	# contrast whatever the accent is. Anchored to the bottom and given a
@@ -311,6 +318,9 @@ func _build() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(spacer)
+	_game_summary = GameSummary.new()
+	_summary_row = _inset(_game_summary)
+	column.add_child(_summary_row)
 
 	# THE PLACEHOLDER AND THE RAIL ARE BOTH BUILT, and only one of them is ever
 	# visible -- see _refresh_empty_state. A machine with nothing installed gets
@@ -410,6 +420,8 @@ func _on_card_selected(entry: Dictionary) -> void:
 		_selected_card.set_selected_size(false)
 	_selected_card = card
 	card.set_selected_size(true)
+	_game_summary.show_entry(entry)
+	_update_hero_art(entry)
 
 	_scroll_to_selected()
 	# The bar's way back down has to follow the cursor, or Down from the bar
@@ -420,6 +432,31 @@ func _on_card_selected(entry: Dictionary) -> void:
 			button.focus_neighbor_bottom = button.get_path_to(card)
 
 	ShellLog.info("selected %s" % str(entry.get("id", "")))
+
+
+func _update_hero_art(entry: Dictionary) -> void:
+	var assets: Dictionary = entry.get("metadata", {}).get("assets", {})
+	var path := str(assets.get("background", {}).get("path", ""))
+	if path.is_empty():
+		path = str(assets.get("header", {}).get("path", ""))
+	if path == _hero_art_path:
+		return
+	_hero_art_path = path
+	_hero_art.texture = null
+	if path.is_empty():
+		return
+	if not _hero_art_cache.has(path):
+		var image := Icons.load_icon_image(path)
+		if image == null:
+			return
+		# Bound backdrop memory even when the provider supplies very large art.
+		var ratio := minf(1.0, minf(1920.0 / image.get_width(), 1080.0 / image.get_height()))
+		if ratio < 1.0:
+			image.resize(maxi(1, roundi(image.get_width() * ratio)), maxi(1, roundi(image.get_height() * ratio)))
+		if _hero_art_cache.size() >= 4:
+			_hero_art_cache.erase(_hero_art_cache.keys()[0])
+		_hero_art_cache[path] = ImageTexture.create_from_image(image)
+	_hero_art.texture = _hero_art_cache[path]
 
 
 ## Park the selected card's left edge on the safe margin by sliding the STRIP,
@@ -447,6 +484,11 @@ func _scroll_to_selected() -> void:
 ## Exactly one of the rail and the empty-library sentence is visible.
 func _refresh_empty_state() -> void:
 	var has_library := not _cards.is_empty()
+	if _summary_row != null:
+		_summary_row.visible = has_library
+	if not has_library and _hero_art != null:
+		_hero_art.texture = null
+		_hero_art_path = ""
 	if _rail_row != null:
 		_rail_row.visible = has_library
 	if _title_block != null:

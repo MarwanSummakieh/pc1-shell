@@ -26,7 +26,7 @@ func _run() -> void:
 	await process_frame
 	var service := root.get_node("Metadata")
 	service._folder = "/tmp/pc1-metadata-shell-%d" % OS.get_process_id()
-	service.games = {"managed.tekken": {"title": "TEKKEN 8", "source": "Windows", "status": "ready", "provider": "Steam Store", "provider_id": "1778820", "description": "Game description", "genres": ["Action"], "overrides": {"title": "My Tekken"}}}
+	service.games = {"managed.tekken": {"title": "TEKKEN 8", "source": "Windows", "status": "ready", "provider": "Steam Store", "provider_id": "1778820", "description": "Game description", "genres": ["Action"], "release_date": "Jan 25, 2024", "developers": ["Bandai Namco"], "overrides": {"title": "My Tekken"}}}
 	var original := {"id": "managed.tekken", "title": "original", "exec": ["unchanged"], "state": "installed", "input_mode": "gamepad"}
 	var enriched: Dictionary = service.enrich(original)
 	check(enriched.title == "My Tekken", "manual title wins")
@@ -35,6 +35,12 @@ func _run() -> void:
 	root.get_node("Installed").apps = [{"id": "steam", "title": "Steam", "state": "installed", "exec": ["fixture"]}, enriched]
 	root.add_child(home)
 	await process_frame
+	home._cards[1].grab_focus()
+	check(home._summary_row.visible and home._game_summary._title.text == "My Tekken", "selected title is displayed on home")
+	check(home._game_summary._facts.text.contains("Action") and home._game_summary._facts.text.contains("2024") and home._game_summary._facts.text.contains("Bandai Namco"), "home displays genre, release and developer")
+	check(home._game_summary._description.text == "Game description", "home displays description without opening details")
+	home._cards[0].grab_focus()
+	check(home._game_summary._title.text == "Steam" and not home._game_summary._facts.visible, "another selection replaces metadata without stale game facts")
 	home._cards[1].grab_focus()
 	await press("ui_down")
 	check(home._details != null and not home.visible, "controller Down opens details and hides rail")
