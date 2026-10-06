@@ -6,6 +6,7 @@ const TvTheme = preload("res://src/tv_theme.gd")
 const Icons = preload("res://src/icons.gd")
 const ActionRow = preload("res://src/action_row.gd")
 const AchievementsPage = preload("res://src/achievements_page.gd")
+const MetadataPage = preload("res://src/metadata_page.gd")
 
 var entry: Dictionary = {}
 var _list: VBoxContainer
@@ -19,6 +20,7 @@ var _content: VBoxContainer
 var _status: Label
 var _backdrop_path := ""
 var _achievements: Control
+var _metadata_page: Control
 
 
 func _ready() -> void:
@@ -83,6 +85,7 @@ func _ready() -> void:
 	hints.add_child(TvTheme.hint("A", "Play"))
 	hints.add_child(TvTheme.hint("B", "Back"))
 	hints.add_child(TvTheme.hint("Y", "Achievements"))
+	hints.add_child(TvTheme.hint("OPTIONS", "Metadata"))
 	hints.add_child(TvTheme.hint("L1 / R1", "Scroll details"))
 	column.add_child(hints)
 	Metadata.changed.connect(_refresh)
@@ -213,6 +216,10 @@ func _play() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_shell_options"):
+		get_viewport().set_input_as_handled()
+		_open_metadata()
+		return
 	if event.is_action_pressed("ui_shell_y"):
 		get_viewport().set_input_as_handled()
 		_open_achievements()
@@ -243,6 +250,29 @@ func _close_achievements() -> void:
 		_achievements.get_parent().remove_child(_achievements)
 		_achievements.queue_free()
 	_achievements = null
+	show()
+	set_process_unhandled_input(true)
+	if not _rows.is_empty():
+		_rows[0].grab_focus()
+
+
+func _open_metadata() -> void:
+	if is_instance_valid(_metadata_page):
+		return
+	hide()
+	set_process_unhandled_input(false)
+	_metadata_page = MetadataPage.new()
+	_metadata_page.entry = entry
+	_metadata_page.closed.connect(func():
+		_close_metadata.call_deferred(), CONNECT_ONE_SHOT)
+	get_tree().root.add_child(_metadata_page)
+
+
+func _close_metadata() -> void:
+	if is_instance_valid(_metadata_page):
+		_metadata_page.get_parent().remove_child(_metadata_page)
+		_metadata_page.queue_free()
+	_metadata_page = null
 	show()
 	set_process_unhandled_input(true)
 	if not _rows.is_empty():
