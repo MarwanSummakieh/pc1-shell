@@ -5,6 +5,7 @@ signal closed()
 const TvTheme = preload("res://src/tv_theme.gd")
 const Icons = preload("res://src/icons.gd")
 const ActionRow = preload("res://src/action_row.gd")
+const AchievementsPage = preload("res://src/achievements_page.gd")
 
 var entry: Dictionary = {}
 var _list: VBoxContainer
@@ -17,6 +18,7 @@ var _info_scroll: ScrollContainer
 var _content: VBoxContainer
 var _status: Label
 var _backdrop_path := ""
+var _achievements: Control
 
 
 func _ready() -> void:
@@ -80,9 +82,11 @@ func _ready() -> void:
 	hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
 	hints.add_child(TvTheme.hint("A", "Play"))
 	hints.add_child(TvTheme.hint("B", "Back"))
+	hints.add_child(TvTheme.hint("Y", "Achievements"))
 	hints.add_child(TvTheme.hint("L1 / R1", "Scroll details"))
 	column.add_child(hints)
 	Metadata.changed.connect(_refresh)
+	PlayHistory.changed.connect(_refresh)
 	_refresh()
 
 
@@ -125,7 +129,7 @@ func _row(key: String, title: String, callback: Callable) -> void:
 
 
 func _refresh() -> void:
-	var fresh := Metadata.enrich(entry)
+	var fresh := PlayHistory.enrich(Metadata.enrich(entry))
 	var metadata: Dictionary = fresh.get("metadata", {})
 	var signature := JSON.stringify(fresh)
 	if signature == _signature:
@@ -151,6 +155,10 @@ func _refresh() -> void:
 	var source := str(entry.get("id", "")).get_slice(".", 0)
 	var source_label := str({"managed": "Windows", "win": "Windows", "steam": "Steam", "epic": "Epic", "gog": "GOG", "rom": "Emulated"}.get(source, "Application"))
 	_label(facts, "Source: " + source_label)
+	if fresh.has("play_history"):
+		_label(facts, "Playtime: " + PlayHistory.duration(float(fresh.play_history.total_seconds)))
+		_label(facts, "Last played: " + PlayHistory.last_played(float(fresh.play_history.last_played_at)))
+		_label(facts, "Sessions: %d" % fresh.play_history.sessions.size())
 	_label(_content, str(metadata.get("description", "")))
 	for pair in [["release_date", "Released"], ["genres", "Genres"], ["developers", "Developer"], ["publishers", "Publisher"], ["platforms", "Platforms"]]:
 		var value: Variant = metadata.get(pair[0], "")
@@ -172,6 +180,12 @@ func _refresh() -> void:
 			_backdrop.texture = ImageTexture.create_from_image(image)
 	if not str(metadata.get("provider", "")).is_empty():
 		_label(_content, "Metadata from " + str(metadata.provider), TvTheme.SIZE_SUPPLEMENTAL)
+	var sessions: Array = fresh.get("play_history", {}).get("sessions", [])
+	if not sessions.is_empty():
+		_label(_content, "Recent sessions", TvTheme.SIZE_BODY)
+		for index in range(sessions.size() - 1, maxi(-1, sessions.size() - 6), -1):
+			var session: Dictionary = sessions[index]
+			_label(_content, "%s · %s" % [PlayHistory.last_played(float(session.get("started_at", 0))), PlayHistory.duration(float(session.get("seconds", 0)))], TvTheme.SIZE_SUPPLEMENTAL)
 	var status := str(metadata.get("status", ""))
 	var message := str(metadata.get("error", ""))
 	if status in ["", "loading"]:
@@ -199,6 +213,10 @@ func _play() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_shell_y"):
+		get_viewport().set_input_as_handled()
+		_open_achievements()
+		return
 	if event.is_action_pressed("ui_shell_l1") or event.is_action_pressed("ui_shell_r1"):
 		_info_scroll.scroll_vertical += -240 if event.is_action_pressed("ui_shell_l1") else 240
 		get_viewport().set_input_as_handled()
@@ -206,3 +224,26 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		get_viewport().set_input_as_handled()
 		closed.emit()
+
+
+func _open_achievements() -> void:
+	if is_instance_valid(_achievements):
+		return
+	hide()
+	set_process_unhandled_input(false)
+	_achievements = AchievementsPage.new()
+	_achievements.entry = entry
+	_achievements.closed.connect(func():
+		_close_achievements.call_deferred(), CONNECT_ONE_SHOT)
+	get_tree().root.add_child(_achievements)
+
+
+func _close_achievements() -> void:
+	if is_instance_valid(_achievements):
+		_achievements.get_parent().remove_child(_achievements)
+		_achievements.queue_free()
+	_achievements = null
+	show()
+	set_process_unhandled_input(true)
+	if not _rows.is_empty():
+		_rows[0].grab_focus()

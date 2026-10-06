@@ -44,6 +44,10 @@ func show_entry(entry: Dictionary) -> void:
 	if not developers.is_empty():
 		parts.append(", ".join(developers))
 	_facts.text = " · ".join(parts)
+	var history: Dictionary = entry.get("play_history", {})
+	if not history.is_empty():
+		parts.append(PlayHistory.duration(float(history.get("total_seconds", 0))))
+		_facts.text = " · ".join(parts)
 	_facts.visible = not _facts.text.is_empty()
 	_description.text = str(metadata.get("description", entry.get("subtitle", "")))
 	_description.visible = not _description.text.is_empty()

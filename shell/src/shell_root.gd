@@ -171,6 +171,8 @@ func _ready() -> void:
 	Info.info_closed.connect(_on_surface_closed)
 	WindowsInstall.opened.connect(_on_surface_opened)
 	WindowsInstall.closed.connect(_on_surface_closed)
+	DownloadInstall.opened.connect(_on_surface_opened)
+	DownloadInstall.closed.connect(_on_surface_closed)
 	WindowsInstall.changed.connect(_on_windows_changed)
 	WindowsInstall.guided_finished.connect(_on_guided_setup_return)
 	WindowsInstall.guided_backgrounded.connect(_on_guided_setup_return)
@@ -390,9 +392,8 @@ func _build_rail() -> Control:
 
 ## Build one card per entry, in the order the seam supplied them.
 ##
-## ORDER IS THE SCANNER'S, not this screen's. appscan decides what the library
-## looks like; a second sort here would mean two answers to "where is my game"
-## and the one a person learns is whichever they saw first.
+## Installed supplies recently played order. Unplayed entries retain scanner
+## order, and _on_apps_changed restores the selected installation by stable ID.
 func _populate() -> void:
 	for card in _cards:
 		_rail.remove_child(card)

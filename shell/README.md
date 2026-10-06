@@ -60,3 +60,34 @@ or exported binaries.
 The session supports a developer shell override under
 `/var/marwanos/dev-shell/marwanos-shell` when `/var/marwanos/devmode` exists.
 See [dev-setup.md](../docs/dev-setup.md) for deployment and recovery commands.
+
+## Play history
+
+The library sorts by most recently played, retaining scanner order for unplayed
+entries and equal timestamps. Home summaries show total playtime; game details
+show total time, last played UTC and session count while retaining Play as the
+only action. `PlayHistory.stats(installation_id)` also exposes the persisted
+session records. IDs identify installations, so reinstalling under a different
+ID begins a separate history even when the Steam metadata ID is the same.
+
+History lives at `~/.local/share/marwanos/play-history/state.json` in the player's
+home, with an independently atomic backup. The observer checks compositor focus
+once per second. It starts only after a real launch is confirmed on screen and
+the entry is a game: confirmed Steam Store game metadata, an explicit `kind:
+game`, or a ROM entry. Failed/windowless launches, placeholders, desktop tools
+and installer executables do not count. Games without metadata or an explicit
+game classification remain uncounted until classification is available.
+Ordinary launch windows must belong to the watched process or descendants;
+Steam handoffs additionally require the exact game ID in the foreground window's
+`STEAM_GAME` property, so the Steam client or another game cannot accrue time.
+
+Minimizing, shell overlays or focus loss pause accounting without splitting the
+session; resuming the same running process continues it. Foreground idle time,
+cutscenes and menus count, since lack of button presses cannot establish that
+someone stopped playing. Background idle time does not. Intervals over five
+seconds in either monotonic or wall clock, including suspend or a stalled
+observer, are discarded. Ordinary exit closes the session. Checkpoints occur
+every fifteen counted seconds and at transitions; shell crash or reboot closes
+unfinished sessions at the last checkpoint on recovery, never extrapolating
+downtime. This can conservatively lose up to fifteen seconds on abrupt failure.
+`MARWANOS_HISTORY_HOME` selects an isolated directory for regression tests.

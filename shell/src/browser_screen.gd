@@ -964,7 +964,9 @@ func _on_download_updated(download: Dictionary, view: Control = null) -> void:
 	_downloads[download.id] = download
 	var name := str(download.get("name", "download"))
 	match str(download.state):
-		"complete": _download_summary = "Saved to Downloads: " + name
+		"complete":
+			_download_summary = "Saved to Downloads: " + name
+			DownloadInstall.completed(str(download.get("path", "")))
 		"cancelled": _download_summary = "Download cancelled: " + name
 		"failed": _download_summary = name + " — " + str(download.detail)
 		_:

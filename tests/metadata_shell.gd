@@ -55,6 +55,11 @@ func _run() -> void:
 	check(root.get_viewport().gui_get_focus_owner() == screen._rows[0], "metadata update retains Play focus")
 	home._on_apps_changed(root.get_node("Installed").apps)
 	check(root.get_viewport().gui_get_focus_owner() == screen._rows[0], "metadata rail rebuild retains details focus")
+	await press("ui_shell_y")
+	check(screen._achievements != null and not screen.visible and home._details == screen, "Y opens achievements from details without another action button")
+	await press("ui_cancel")
+	await process_frame
+	check(screen._achievements == null and screen.visible and root.get_viewport().gui_get_focus_owner() == screen._rows[0], "achievement Back restores Play focus without closing details")
 	await press("ui_cancel")
 	await process_frame
 	check(home._details == null and home.visible, "Back returns to rail")

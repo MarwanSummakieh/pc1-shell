@@ -79,7 +79,33 @@ func _run() -> void:
 		"detail": "Choose the program to add to your library.",
 		"choices": [{"id": "drive_c/Program Files/Game.exe", "title": "Game", "detail": "Program Files/Game.exe"}]}]
 	installs.changed.emit()
-	check(screen._installer._rows[0].get_meta("key") == "local-review.drive_c/Program Files/Game.exe", "finished setup offers the installed executable for library selection")
+	check(screen._installer._rows[0].get_meta("key") == "local-review.drive_c/Program Files/Game.exe.game", "finished setup offers the installed executable as a game")
+	check(screen._installer._rows[1].get_meta("key") == "local-review.drive_c/Program Files/Game.exe.app", "finished setup also offers the executable as an application")
+	check(screen._installer._rows[0]._value_text == "Native controller input", "game choice explains its native controller profile")
+	check(screen._installer._rows[1]._value_text == "Controller pointer", "application choice explains its pointer profile")
+	# Exercise the real controller action and helper argv boundary without
+	# registering an application or starting Wine in this disposable UI fixture.
+	var old_helper: String = installs.helper
+	var helper_path := home.path_join("register-fixture.sh")
+	var register_helper := FileAccess.open(helper_path, FileAccess.WRITE)
+	register_helper.store_string("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n")
+	register_helper.close()
+	FileAccess.set_unix_permissions(helper_path, 448)
+	installs.helper = helper_path
+	for index in 2:
+		DirAccess.remove_absolute(helper_path + ".args")
+		screen._installer._rows[index].grab_focus()
+		await press(JOY_BUTTON_A)
+		for attempt in 10:
+			if FileAccess.file_exists(helper_path + ".args"):
+				break
+			await create_timer(0.02).timeout
+		var expected_mode := "gamepad" if index == 0 else "pointer"
+		check(FileAccess.file_exists(helper_path + ".args"), "controller choice starts the registration helper")
+		if FileAccess.file_exists(helper_path + ".args"):
+			check(FileAccess.get_file_as_string(helper_path + ".args") == "register\nlocal-review\ndrive_c/Program Files/Game.exe\n" + expected_mode + "\n",
+				"controller registration preserves the chosen executable and " + expected_mode + " profile")
+	installs.helper = old_helper
 	var generic_entry := {"id": "local-test", "title": "Setup", "state": "installed", "input_mode": "pointer"}
 	screen._installer._on_launch_started(generic_entry)
 	check(not screen.visible, "file list hides while Windows setup owns the display")

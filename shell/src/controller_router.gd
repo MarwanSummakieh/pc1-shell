@@ -1,7 +1,7 @@
 extends Node
 
 ## The appliance broker exclusively reads the physical controller. Applications
-## see a virtual controller that is neutral while PC1 owns the foreground.
+## see four stable virtual slots, all neutral while PC1 owns the foreground.
 const DEVICE := 15
 var _socket := PacketPeerUDP.new()
 var _endpoint: Dictionary = {}
@@ -14,6 +14,8 @@ var _app_input := false
 var _connected := false
 var _routed := false
 var _shell_ready := false
+## One-based application slots; only slot one drives ordinary shell navigation.
+var players: Array = []
 
 func _ready() -> void:
 	_buttons.resize(15)
@@ -87,14 +89,16 @@ func _process(delta: float) -> void:
 
 func _apply_state(state: Dictionary) -> void:
 	var connected := bool(state.get("connected", false))
+	players = state.get("players", [])
 	var player = get_node_or_null("/root/PlayerOne")
 	if player != null and (connected != _connected or (connected and player.device != DEVICE)):
 		player.set_routed_controller(connected, DEVICE, str(state.get("name", "Controller")))
 	_connected = connected
-	var buttons: Array = state.get("buttons", []) if connected else []
+	var buttons: Array = state.get("buttons", [])
 	var axes: Array = state.get("axes", []) if connected else []
 	for index in 15:
-		var pressed := bool(buttons[index]) if index < buttons.size() else false
+		# Guide/Share on any player still opens Home if player one is unplugged.
+		var pressed := bool(buttons[index]) if index < buttons.size() and (connected or index in [4, 5]) else false
 		if pressed != bool(_buttons[index]):
 			_buttons[index] = pressed
 			var event := InputEventJoypadButton.new()
