@@ -50,6 +50,7 @@ const IconButton = preload("res://src/icon_button.gd")
 const AppOverlay = preload("res://src/app_overlay.gd")
 const ListMenu = preload("res://src/list_menu.gd")
 const ErrorScreen = preload("res://src/error_screen.gd")
+const GameDetails = preload("res://src/game_details.gd")
 const ProcessPill = preload("res://src/process_pill.gd")
 const ProcessMenu = preload("res://src/process_menu.gd")
 const StatusCorner = preload("res://src/status_corner.gd")
@@ -88,12 +89,8 @@ var _app_alert_timer: Timer = null
 var _open_hint: Control = null
 var _options_hint: Control = null
 var _overlay: AppOverlay = null
-## The details panel. ALWAYS NULL TODAY -- details_panel.gd went with the rail,
-## and nothing opens one. Typed as Control rather than as the deleted class, and
-## kept rather than removed, because three guards read it to mean "a sheet is
-## covering the lower deck": _bar_input_live, _unhandled_input and the B
-## handler. Whatever renders the sources will set it again, and until then the
-## guards are correct for free.
+## The details screen is opened from Down on a library card.
+## It hides the rail and returns focus to the selected installation on Back.
 var _details: Control = null
 ## The bar's focusable cluster, in the order they sit. Kept as one array as
 ## well as four members because every wiring loop below wants "all of them" --
@@ -396,6 +393,7 @@ func _populate() -> void:
 		var card := Card.new()
 		card.setup(entry)
 		card.selected.connect(_on_card_selected)
+		card.details_requested.connect(_open_details.bind(entry))
 		_rail.add_child(card)
 		_cards.append(card)
 
@@ -464,8 +462,11 @@ func _refresh_empty_state() -> void:
 func _on_apps_changed(_apps: Array) -> void:
 	var focused_id := ""
 	var owner := get_viewport().gui_get_focus_owner()
-	if owner != null and _cards.has(owner):
+	var rail_focused := owner != null and _cards.has(owner)
+	if rail_focused:
 		focused_id = str(owner.entry.get("id", ""))
+	elif is_instance_valid(_last_focused) and _cards.has(_last_focused):
+		focused_id = str(_last_focused.entry.get("id", ""))
 
 	_populate()
 	_wire_focus_neighbours()
@@ -477,7 +478,9 @@ func _on_apps_changed(_apps: Array) -> void:
 			restored = card
 			break
 	if restored != null:
-		restored.grab_focus()
+		_last_focused = restored
+		if visible and rail_focused:
+			restored.grab_focus()
 	else:
 		_ensure_focus()
 
@@ -626,6 +629,7 @@ func _build_hints() -> Control:
 	# how a person learns that, and the top bar's icons still take an A.
 	_open_hint = TvTheme.hint("A", "Open")
 	hints.add_child(_open_hint)
+	hints.add_child(TvTheme.hint("↓", "Details"))
 	# OPTIONS is the only route to removing an application on a machine with no
 	# terminal, so it is advertised rather than left to be discovered. Hidden
 	# with the A hint when the rail is empty -- there is nothing to have options
@@ -1124,6 +1128,26 @@ func _set_lower_deck_visible(shown: bool) -> void:
 	for node in [_title_block, _rail_row, _hint_row]:
 		if is_instance_valid(node):
 			node.visible = shown
+
+
+func _open_details(entry: Dictionary) -> void:
+	if not visible or _details != null or _process_menu != null or Launcher.is_busy():
+		return
+	_details = GameDetails.new()
+	_details.entry = entry
+	_details.closed.connect(func(): _close_details.call_deferred(), CONNECT_ONE_SHOT)
+	_hand_screen_over()
+	get_tree().root.add_child(_details)
+
+
+func _close_details() -> void:
+	if _details == null:
+		return
+	_details.get_parent().remove_child(_details)
+	_details.queue_free()
+	_details = null
+	if not Launcher.is_busy():
+		_take_screen_back()
 
 
 ## The processes menu, from the pill in the bar's left corner. Same guards as

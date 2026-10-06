@@ -41,6 +41,7 @@ signal details_requested()
 const SOURCES := {
 	"steam.": "Steam",
 	"win.": "Windows",
+	"managed.": "Windows",
 	"epic.": "Epic",
 	"gog.": "GOG",
 	"rom.": "Emulated",
@@ -133,15 +134,14 @@ func _build_contents() -> void:
 
 
 func _load_icon() -> void:
-	var path := str(entry.get("icon", ""))
-	if path.is_empty():
-		return
-	var image := Icons.load_icon_image(path)
-	if image == null:
-		# Not a warning: an entry with no usable picture is a normal card with
-		# an accent wash and a name on it, which is what the wash is for.
-		return
-	_icon_rect.texture = ImageTexture.create_from_image(image)
+	for kind in ["cover", "icon"]:
+		var path := str(entry.get(kind, ""))
+		if path.is_empty():
+			continue
+		var image := Icons.load_icon_image(path)
+		if image != null:
+			_icon_rect.texture = ImageTexture.create_from_image(image)
+			return
 
 
 ## What to call this entry's source on screen, or empty for an application.
@@ -191,10 +191,7 @@ func _on_pressed() -> void:
 func _gui_input(event: InputEvent) -> void:
 	# DOWN on a focused card asks for its details rather than moving focus --
 	# there is nothing below the rail to move to. Kept as a signal rather than
-	# acted on here so the rail owns what "details" means; today nothing listens
-	# and the press is simply consumed, which is honest: a card that silently
-	# did nothing on Down would be indistinguishable from one that moved focus
-	# somewhere invisible.
+	# acted on here so the rail owns the details screen and focus restoration.
 	if event.is_action_pressed("ui_down"):
 		accept_event()
 		details_requested.emit()
