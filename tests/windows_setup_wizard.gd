@@ -147,6 +147,31 @@ func _run() -> void:
 	check(str(root.gui_get_focus_owner().get_meta("key")) == "11", "music participates in the same controller footer navigation")
 	page(53, [unknown, music, next, cancel])
 	check(not wizard._footer_rows[0].disabled and wizard._footer_rows[1].disabled, "music can be muted on an unsupported page while advancing stays blocked")
+	var logo := {"id": 40, "kind": "unsupported", "class": "ThemeStaticOwnerDraw", "text": "", "enabled": true}
+	var agreement := {"id": 41, "kind": "check", "text": "I &agree to the license terms and conditions", "checked": 0, "enabled": true}
+	var install := {"id": 42, "kind": "button", "text": "&Install", "enabled": false}
+	var close := {"id": 43, "kind": "button", "text": "&Close", "enabled": true}
+	var license := {"id": 44, "kind": "text", "text": "Microsoft runtime license terms\n".repeat(30)}
+	page(54, [logo, license, agreement, install, close])
+	check(not wizard._status.visible and not wizard._body_rows[1].disabled, "WiX logo cannot disable the real license agreement checkbox")
+	wizard._body_rows[0].grab_focus()
+	await press(JOY_BUTTON_DPAD_DOWN)
+	check(root.gui_get_focus_owner() == wizard._body_rows[1], "D-pad reaches agreement after license text")
+	await press(JOY_BUTTON_A)
+	check(command() == [54, 41, 1, ""], "A toggles the real Microsoft agreement control")
+	agreement.checked = 1
+	install.enabled = true
+	page(55, [logo, license, agreement, install, close])
+	await press(JOY_BUTTON_DPAD_DOWN)
+	check(str(root.gui_get_focus_owner().get_meta("key")) == "42", "D-pad reaches Install when the native agreement enables it")
+	await press(JOY_BUTTON_A)
+	check(command() == [55, 42, 1, ""], "A invokes Microsoft Install")
+	await press(JOY_BUTTON_DPAD_RIGHT)
+	check(str(root.gui_get_focus_owner().get_meta("key")) == "43", "D-pad Right reaches Microsoft Close")
+	await press(JOY_BUTTON_A)
+	check(command() == [55, 43, 1, ""], "A invokes Microsoft Close")
+	page(56, [unknown, agreement, install, close])
+	check(not wizard._body_rows[0].disabled and wizard._footer_rows[0].disabled and not wizard._footer_rows[1].disabled, "real unsupported choices keep agreement and Close reachable while Install stays blocked")
 	root.get_node("WindowsInstall").background_guided()
 	check(not wizard.visible and source_screen._rows.has(root.gui_get_focus_owner()), "Return to Files restores installer focus while setup stays available")
 	root.get_node("WindowsInstall").resume_guided()

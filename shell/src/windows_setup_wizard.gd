@@ -149,7 +149,7 @@ func _build_page() -> void:
 	_location.visible = not _location.text.is_empty()
 	var unsupported := false
 	for control in _page.get("controls", []):
-		if control.get("kind") == "unsupported" and control.get("enabled", false):
+		if _blocks_advancing(control):
 			unsupported = true
 	if unsupported:
 		_status.text = "This setup page needs the original interface. Restart with Original Windows setup from Files."
@@ -200,7 +200,7 @@ func _build_page() -> void:
 					caption = "Edit options"
 					detail = "D-pad chooses an option; A toggles it."
 				var row := _add_row(identifier, caption, detail, _activate.bind(control.duplicate(true)))
-				row.disabled = not bool(control.get("enabled", true)) or unsupported
+				row.disabled = not bool(control.get("enabled", true))
 				if kind in ["check", "radio"]:
 					var indicator := PanelContainer.new()
 					indicator.custom_minimum_size = Vector2(36, 36)
@@ -244,7 +244,7 @@ func _build_page() -> void:
 			content.move_child(speaker, 0)
 			_images[int(control.get("id", 0))] = speaker
 		# Cancel remains available even if a custom choice cannot be adapted.
-		row.disabled = not bool(control.get("enabled", true)) or (unsupported and not control.get("music", false) and _navigation_name(str(control.get("text", ""))) not in ["cancel", "back"])
+		row.disabled = not bool(control.get("enabled", true)) or (unsupported and not control.get("music", false) and _navigation_name(str(control.get("text", ""))) not in ["cancel", "back", "close"])
 	_add_row("home", "Setup options", "", _options, true)
 	_wire_navigation()
 	var target: Control
@@ -261,6 +261,12 @@ func _build_page() -> void:
 				found = true
 		if not found:
 			_list_edit.clear()
+
+
+func _blocks_advancing(control: Dictionary) -> bool:
+	# Accept snapshots from a bridge already running before the WiX static-class
+	# fix. Its read-only logo must not disable the real agreement and buttons.
+	return control.get("kind") == "unsupported" and control.get("enabled", false) and str(control.get("class", "")).to_lower() != "themestaticownerdraw"
 
 
 func _navigation_name(caption: String) -> String:
