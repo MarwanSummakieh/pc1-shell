@@ -46,20 +46,15 @@ func _run() -> void:
 	check(home._details != null and not home.visible, "controller Down opens details and hides rail")
 	var screen: Control = home._details
 	check(root.get_viewport().gui_get_focus_owner() == screen._rows[0], "details starts on Play")
-	screen._rows[1].grab_focus()
-	await press("ui_accept")
-	var paths := DirAccess.get_files_at(service._folder.path_join("requests"))
-	check(paths.size() == 1, "controller refresh publishes one request")
-	var request: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(service._folder.path_join("requests").path_join(paths[0])))
-	check(request.action == "refresh" and request.game_id == original.id, "refresh targets installation ID")
-	home._on_apps_changed(root.get_node("Installed").apps)
-	check(root.get_viewport().gui_get_focus_owner() == screen._rows[1], "metadata rail rebuild retains details focus")
-	screen._rows[2].grab_focus()
-	await press("ui_accept")
-	check(screen._keyboard != null and not screen._keyboard.masked, "controller match correction opens unmasked keyboard")
-	await press("ui_cancel")
+	check(screen._rows.size() == 1 and screen._rows[0].get_meta("details_key") == "play", "Play is the only details action")
+	service.games[original.id].status = "needs-match"
+	service.games[original.id].candidates = [{"title": "Other Tekken", "provider_id": "123"}]
+	service.changed.emit()
 	await process_frame
-	check(screen._keyboard == null and home._details != null, "keyboard cancel returns to details")
+	check(screen._rows.size() == 1, "ambiguous metadata does not add extra buttons")
+	check(root.get_viewport().gui_get_focus_owner() == screen._rows[0], "metadata update retains Play focus")
+	home._on_apps_changed(root.get_node("Installed").apps)
+	check(root.get_viewport().gui_get_focus_owner() == screen._rows[0], "metadata rail rebuild retains details focus")
 	await press("ui_cancel")
 	await process_frame
 	check(home._details == null and home.visible, "Back returns to rail")

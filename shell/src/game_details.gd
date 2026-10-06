@@ -5,15 +5,12 @@ signal closed()
 const TvTheme = preload("res://src/tv_theme.gd")
 const Icons = preload("res://src/icons.gd")
 const ActionRow = preload("res://src/action_row.gd")
-const Keyboard = preload("res://src/keyboard.gd")
 
 var entry: Dictionary = {}
 var _list: VBoxContainer
 var _scroll: ScrollContainer
 var _rows: Array = []
-var _keyboard: Control
 var _signature := ""
-var _local_error := ""
 var _backdrop: TextureRect
 var _heading: Label
 var _info_scroll: ScrollContainer
@@ -81,7 +78,7 @@ func _ready() -> void:
 	column.add_child(_status)
 	var hints := HBoxContainer.new()
 	hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
-	hints.add_child(TvTheme.hint("A", "Select"))
+	hints.add_child(TvTheme.hint("A", "Play"))
 	hints.add_child(TvTheme.hint("B", "Back"))
 	hints.add_child(TvTheme.hint("L1 / R1", "Scroll details"))
 	column.add_child(hints)
@@ -130,8 +127,8 @@ func _row(key: String, title: String, callback: Callable) -> void:
 func _refresh() -> void:
 	var fresh := Metadata.enrich(entry)
 	var metadata: Dictionary = fresh.get("metadata", {})
-	var signature := JSON.stringify([fresh, _local_error])
-	if signature == _signature or _keyboard != null:
+	var signature := JSON.stringify(fresh)
+	if signature == _signature:
 		return
 	_signature = signature
 	var focus := get_viewport().gui_get_focus_owner()
@@ -180,23 +177,12 @@ func _refresh() -> void:
 	if status in ["", "loading"]:
 		message = "Downloading metadata…" if status == "loading" else "Metadata will download automatically when the service is available."
 	elif status == "needs-match":
-		message = "Choose the matching game or search for another title."
+		message = "Game metadata could not be matched automatically."
 	elif status == "unmatched":
-		message = "No automatic match. Search for the game title."
-	_status.text = _local_error if not _local_error.is_empty() else message
-	var search_error := str(metadata.get("search_error", ""))
-	if not search_error.is_empty():
-		_status.text += ("\n" if not _status.text.is_empty() else "") + search_error
+		message = "No metadata found for this game."
+	_status.text = message
 	_status.visible = not _status.text.is_empty()
 	_row("play", "Play", _play)
-	_row("refresh", "Refresh metadata", func(): _request("refresh"))
-	_row("search", "Change metadata match", func(): _edit("search"))
-	_row("title", "Edit title", func(): _edit("title"))
-	for candidate in metadata.get("candidates", []):
-		var id := str(candidate.get("provider_id", ""))
-		_row("match:" + id, "%s · Steam %s" % [candidate.get("title", ""), id], _choose.bind(id))
-	if str(entry.get("id", "")).begins_with("managed."):
-		_row("remove", "Remove application", _remove)
 	TvTheme.wire_column(_rows)
 	if visible:
 		var restore: Control = _rows[0]
@@ -207,54 +193,16 @@ func _refresh() -> void:
 		_scroll.set_deferred("scroll_vertical", scroll_value)
 
 
-func _request(action: String, extra: Dictionary = {}) -> void:
-	_local_error = "" if Metadata.request(action, str(entry.get("id", "")), extra) else "Could not save the metadata request. Try again."
-	_refresh()
-
-
-func _choose(provider_id: String) -> void:
-	_request("match", {"provider_id": provider_id})
-
-
-func _edit(action: String) -> void:
-	if _keyboard != null:
-		return
-	_keyboard = Keyboard.new()
-	_keyboard.title_text = "Search game title" if action == "search" else "Game title"
-	_keyboard.masked = false
-	_keyboard.initial_text = str(Metadata.enrich(entry).get("title", ""))
-	_keyboard.submitted.connect(func(text: String):
-		_request(action, {"query": text} if action == "search" else {"title": text})
-		_close_keyboard.call_deferred())
-	_keyboard.cancelled.connect(func(): _close_keyboard.call_deferred())
-	add_child(_keyboard)
-
-
-func _close_keyboard() -> void:
-	remove_child(_keyboard)
-	_keyboard.queue_free()
-	_keyboard = null
-	_signature = ""
-	_refresh()
-
-
 func _play() -> void:
 	closed.emit()
 	Launcher.launch(entry)
 
 
-func _remove() -> void:
-	closed.emit()
-	WindowsInstall.confirm_remove.call_deferred(entry)
-
-
 func _unhandled_input(event: InputEvent) -> void:
-	if _keyboard != null:
-		return
 	if event.is_action_pressed("ui_shell_l1") or event.is_action_pressed("ui_shell_r1"):
 		_info_scroll.scroll_vertical += -240 if event.is_action_pressed("ui_shell_l1") else 240
 		get_viewport().set_input_as_handled()
 		return
-	if _keyboard == null and event.is_action_pressed("ui_cancel"):
+	if event.is_action_pressed("ui_cancel"):
 		get_viewport().set_input_as_handled()
 		closed.emit()
