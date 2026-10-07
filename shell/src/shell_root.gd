@@ -53,6 +53,7 @@ const Icons = preload("res://src/icons.gd")
 const ProcessPill = preload("res://src/process_pill.gd")
 const ProcessMenu = preload("res://src/process_menu.gd")
 const StatusCorner = preload("res://src/status_corner.gd")
+const AchievementToast = preload("res://src/achievement_toast.gd")
 
 ## How long after Down carried focus off the bar a card refuses to open its
 ## details panel. Comfortably past
@@ -93,6 +94,7 @@ var _app_alert_timer: Timer = null
 var _open_hint: Control = null
 var _options_hint: Control = null
 var _overlay: AppOverlay = null
+var _achievement_toast: AchievementToast = null
 ## The details screen is opened from Down on a library card.
 ## It hides the rail and returns focus to the selected installation on Back.
 var _details: Control = null
@@ -801,10 +803,41 @@ func _on_launch_blocked(detail: String) -> void:
 
 
 func _on_system_notification(entry: Dictionary) -> void:
-	# Store every notification centrally; show a brief alert only on home.
-	# Never focus or expose the shell over a running application.
+	# The inbox remains authoritative. Achievements earned while a game draws
+	# also get a separate passive surface without taking the game input lease.
+	if str(entry.get("app", "")) == "Achievements" and Launcher.is_busy() and Launcher.app_on_screen() and _overlay == null:
+		_show_achievement_toast(entry)
+		return
 	if visible and not Launcher.is_busy() and not Info.is_open():
 		_on_launch_blocked("%s: %s" % [str(entry.get("app", "")), str(entry.get("summary", ""))])
+
+
+func _show_achievement_toast(entry: Dictionary) -> void:
+	_dismiss_achievement_toast()
+	_achievement_toast = AchievementToast.new()
+	get_tree().root.add_child(_achievement_toast)
+	_achievement_toast.expired.connect(_on_achievement_toast_expired.bind(_achievement_toast), CONNECT_ONE_SHOT)
+	if not _achievement_toast.present(entry):
+		_dismiss_achievement_toast()
+
+
+func _dismiss_achievement_toast() -> void:
+	if _achievement_toast == null:
+		return
+	var toast := _achievement_toast
+	_achievement_toast = null
+	toast.retire()
+
+
+func _on_achievement_toast_expired(toast: AchievementToast) -> void:
+	if _achievement_toast == toast:
+		_dismiss_achievement_toast()
+	else:
+		toast.retire()
+
+
+func _exit_tree() -> void:
+	_dismiss_achievement_toast()
 
 
 func _on_windows_changed() -> void:
@@ -818,6 +851,7 @@ func _on_windows_changed() -> void:
 
 
 func _on_launch_finished(_entry: Dictionary) -> void:
+	_dismiss_achievement_toast()
 	if is_instance_valid(_process_pill):
 		_process_pill.visible = Launcher.is_minimized() or not Services.visible_services().is_empty()
 		_on_pill_membership_changed([])
@@ -1095,6 +1129,9 @@ func _hide_bar() -> void:
 
 
 func _open_overlay() -> void:
+	# gamescope selects one external overlay. Retire the passive surface before
+	# Home maps the interactive one, so it cannot cover the menu or keep a lease.
+	_dismiss_achievement_toast()
 	Kiosk.remember_app_window(str(Launcher.current_entry().get("input_mode", "")) == "pointer")
 	Launcher.set_pad_keys_paused(true)
 	Launcher.set_splash_paused(true)
