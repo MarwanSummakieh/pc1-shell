@@ -1,7 +1,7 @@
 extends Node
 
 ## The appliance broker exclusively reads the physical controller. Applications
-## see four stable virtual slots, all neutral while PC1 owns the foreground.
+## see virtual devices for connected player slots, neutral while PC1 owns the foreground.
 const DEVICE := 15
 var _socket := PacketPeerUDP.new()
 var _endpoint: Dictionary = {}
