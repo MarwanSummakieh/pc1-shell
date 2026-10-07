@@ -13,24 +13,24 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func press(button: int) -> void:
-	var event := InputEventJoypadButton.new()
-	event.device = 0
-	event.button_index = button
-	event.pressed = true
-	Input.parse_input_event(event)
+	var router := root.get_node("ControllerRouter")
+	var buttons: Array = router._buttons.duplicate()
+	buttons[button] = true
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": buttons, "axes": router._axes.duplicate()})
 	await process_frame
-	event = event.duplicate()
-	event.pressed = false
-	Input.parse_input_event(event)
+	buttons[button] = false
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": buttons, "axes": router._axes.duplicate()})
 	await process_frame
 	await process_frame
 
 func trigger(axis: int, value: float) -> void:
-	var event := InputEventJoypadMotion.new()
-	event.device = 0
-	event.axis = axis
-	event.axis_value = value
-	Input.parse_input_event(event)
+	var router := root.get_node("ControllerRouter")
+	var axes: Array = router._axes.duplicate()
+	axes[axis] = value
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": router._buttons.duplicate(), "axes": axes})
 	await process_frame
 
 func paste_one(source: String, destination: String, cut: bool) -> Dictionary:
@@ -46,7 +46,16 @@ func paste_one(source: String, destination: String, cut: bool) -> Dictionary:
 	return {"error": "", "name": str(job.completed[0]["name"])} if not job.completed.is_empty() else {"error": "Transfer did not finish"}
 
 func _run() -> void:
-	root.get_node("PlayerOne").device = 0
+	# Feed the real broker-state seam, as controller_shell.gd does. A synthetic
+	# native index has no GUID and is correctly evicted by PlayerOne's timer.
+	# Only UDP transport is paused; input ownership/reconciliation stay enabled.
+	var router := root.get_node("ControllerRouter")
+	router.set_process(false)
+	router._routed = true
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": [false, false, false, false, false, false, false, false,
+			false, false, false, false, false, false, false],
+		"axes": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]})
 	var home := OS.get_environment("PC1_TOOLS_TEST_HOME")
 	var shell: Control = load("res://scenes/shell_root.tscn").instantiate()
 	root.add_child(shell)
@@ -79,7 +88,33 @@ func _run() -> void:
 		"detail": "Choose the program to add to your library.",
 		"choices": [{"id": "drive_c/Program Files/Game.exe", "title": "Game", "detail": "Program Files/Game.exe"}]}]
 	installs.changed.emit()
-	check(screen._installer._rows[0].get_meta("key") == "local-review.drive_c/Program Files/Game.exe", "finished setup offers the installed executable for library selection")
+	check(screen._installer._rows[0].get_meta("key") == "local-review.drive_c/Program Files/Game.exe.game", "finished setup offers the installed executable as a game")
+	check(screen._installer._rows[1].get_meta("key") == "local-review.drive_c/Program Files/Game.exe.app", "finished setup also offers the executable as an application")
+	check(screen._installer._rows[0]._value_text == "Native controller input", "game choice explains its native controller profile")
+	check(screen._installer._rows[1]._value_text == "Controller pointer", "application choice explains its pointer profile")
+	# Exercise the real controller action and helper argv boundary without
+	# registering an application or starting Wine in this disposable UI fixture.
+	var old_helper: String = installs.helper
+	var helper_path := home.path_join("register-fixture.sh")
+	var register_helper := FileAccess.open(helper_path, FileAccess.WRITE)
+	register_helper.store_string("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n")
+	register_helper.close()
+	FileAccess.set_unix_permissions(helper_path, 448)
+	installs.helper = helper_path
+	for index in 2:
+		DirAccess.remove_absolute(helper_path + ".args")
+		screen._installer._rows[index].grab_focus()
+		await press(JOY_BUTTON_A)
+		for attempt in 10:
+			if FileAccess.file_exists(helper_path + ".args"):
+				break
+			await create_timer(0.02).timeout
+		var expected_mode := "gamepad" if index == 0 else "pointer"
+		check(FileAccess.file_exists(helper_path + ".args"), "controller choice starts the registration helper")
+		if FileAccess.file_exists(helper_path + ".args"):
+			check(FileAccess.get_file_as_string(helper_path + ".args") == "register\nlocal-review\ndrive_c/Program Files/Game.exe\n" + expected_mode + "\n",
+				"controller registration preserves the chosen executable and " + expected_mode + " profile")
+	installs.helper = old_helper
 	var generic_entry := {"id": "local-test", "title": "Setup", "state": "installed", "input_mode": "pointer"}
 	screen._installer._on_launch_started(generic_entry)
 	check(not screen.visible, "file list hides while Windows setup owns the display")

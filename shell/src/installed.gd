@@ -92,6 +92,8 @@ func _managed_library() -> Array:
 
 
 func _ready() -> void:
+	Metadata.changed.connect(func(): _loaded = false; _poll())
+	PlayHistory.changed.connect(func(): _loaded = false; _poll())
 	var override := OS.get_environment(STATUS_DIR_ENV)
 	if not override.is_empty():
 		_apps_path = override.path_join(APPS_FILE.get_file())
@@ -124,6 +126,9 @@ func _poll() -> void:
 
 	apps = _parse(raw)
 	apps.append_array(managed)
+	for index in apps.size():
+		apps[index] = Metadata.enrich(apps[index])
+	apps = PlayHistory.recently_played(apps)
 	ShellLog.info("installed applications: %d" % apps.size())
 	for app in apps:
 		ShellLog.info("  %s (%s) [%s]"

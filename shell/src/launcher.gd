@@ -65,6 +65,51 @@ const PAD_KEY_APPS := {}
 var _current: Dictionary = {}
 var _minimized := false
 
+
+func _ready() -> void:
+	var history_timer := Timer.new()
+	history_timer.wait_time = 1.0
+	history_timer.autostart = true
+	history_timer.timeout.connect(_sample_history)
+	add_child(history_timer)
+
+
+func _sample_history() -> void:
+	if _current.is_empty():
+		return
+	var foreground := _app_on_screen and not _minimized and not _pad_keys_paused and not _closing and not _terminating
+	if foreground:
+		foreground = Kiosk.focused_window(_pid, str(_current.get("prefix", ""))) == Kiosk.Focus.ELSEWHERE
+	if foreground:
+		var window := _history_foreground_window()
+		if _handoff:
+			var output: Array = []
+			foreground = window > 0 and OS.execute("xprop", ["-id", str(window), "-notype", "STEAM_GAME"], output, true) == 0 and not output.is_empty() and _history_steam_matches(str(output[0]), str(_current.get("id", "")).trim_prefix(HANDOFF_PREFIX))
+		else:
+			foreground = _pid > 0 and OS.is_process_running(_pid) and window > 0 and Kiosk._window_belongs_to_app(window, _pid)
+	PlayHistory.sample(Metadata.enrich(_current), foreground)
+
+
+func _history_foreground_window() -> int:
+	var output: Array = []
+	if OS.execute("xprop", ["-root", "-notype", Kiosk._focus_property()], output, true) != 0 or output.is_empty():
+		return 0
+	var text := str(output[0])
+	var value := text.get_slice("=", 1) if text.contains("=") else text.get_slice(":", 1)
+	for word in value.replace(",", " ").split(" ", false):
+		var token := word.strip_edges()
+		var id := token.hex_to_int() if token.begins_with("0x") else token.to_int()
+		if id > 0:
+			return id
+	return 0
+
+
+func _history_steam_matches(property_text: String, app_id: String) -> bool:
+	if not app_id.is_valid_int() or not property_text.contains("="):
+		return false
+	var value := property_text.get_slice("=", 1).strip_edges()
+	return value.is_valid_int() and value.to_int() == app_id.to_int()
+
 # Typed as the script rather than as Control so `entry` and `closed` resolve
 # statically -- GDScript treats a missing member on a typed variable as an error,
 # which is the point.
@@ -449,6 +494,7 @@ func _app_is_up() -> void:
 	# condition. See Kiosk.yield_screen for what a second fullscreen window costs
 	# while Steam is mapping its own.
 	_app_on_screen = true
+	_sample_history()
 	ControllerRouter.set_app_input(not _pad_keys_paused and not _uses_pad_bridge())
 	Kiosk.remember_app_window(str(_current.get("input_mode", "")) == "pointer")
 	Kiosk.yield_screen(true)
@@ -577,6 +623,8 @@ func _remove_pad_keys() -> void:
 ## even while no bridge exists, so one created later starts in the right
 ## state -- see _pad_keys_paused.
 func set_pad_keys_paused(value: bool) -> void:
+	if value:
+		PlayHistory.pause()
 	ControllerRouter.set_app_input(_app_on_screen and not _minimized and not value and not _uses_pad_bridge())
 	_pad_keys_paused = value
 	if is_instance_valid(_pad_keys):
@@ -719,6 +767,7 @@ func _close_steam() -> void:
 func minimize_current() -> void:
 	if _current.is_empty() or _minimized:
 		return
+	PlayHistory.pause()
 	_minimized = true
 	_app_on_screen = false
 	set_pad_keys_paused(true)
@@ -900,6 +949,7 @@ func _on_closed() -> void:
 func _finish() -> void:
 	if _current.is_empty():
 		return
+	PlayHistory.finish("exited")
 	var entry := _current
 	_current = {}
 	_closing = false

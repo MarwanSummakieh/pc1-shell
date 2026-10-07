@@ -55,6 +55,18 @@ func _run() -> void:
 	check(player.device == -1, "broker disconnect releases player one")
 	check(not player.button(JOY_BUTTON_A), "disconnect releases held button")
 	check(player.axis(JOY_AXIS_RIGHT_X) == 0.0, "disconnect neutralizes held stick")
+	buttons.fill(false)
+	buttons[0] = true  # A disconnected first slot cannot navigate with stale data.
+	buttons[5] = true  # Home remains available on another local player's pad.
+	router._apply_state({"connected": false, "buttons": buttons,
+		"players": [{"slot": 1, "connected": false}, {"slot": 2, "connected": true, "rumble": true}]})
+	await process_frame
+	check(not Input.is_action_pressed("ui_accept"), "secondary player cannot navigate while player one is disconnected")
+	check(Input.is_action_pressed("ui_shell_home"), "another player can open Home while player one is disconnected")
+	check(router.players.size() == 2 and router.players[1].get("rumble", false), "shell receives independent multiplayer slot capabilities")
+	router._apply_state({"connected": false})
+	await process_frame
+	check(not Input.is_action_pressed("ui_shell_home"), "global Home releases without a connected first pad")
 	bridge._process(0.1)
 	check(not bridge._await_neutral, "pointer bridge resumes after neutral controls")
 	bridge.queue_free()

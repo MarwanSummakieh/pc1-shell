@@ -164,8 +164,10 @@ func _add_choices(job: Dictionary) -> void:
 	for choice in job.get("choices", []):
 		var key := str(job.get("id", ""))
 		var choice_id := str(choice.get("id", ""))
-		_add_row(key + "." + choice_id, "Add " + str(choice.get("title", "")) + " to library",
-			str(choice.get("detail", "")), WindowsInstall.register_local.bind(key, choice_id))
+		_add_row(key + "." + choice_id + ".game", "Add " + str(choice.get("title", "")) + " as game",
+			"Native controller input", WindowsInstall.register_local.bind(key, choice_id, "gamepad"))
+		_add_row(key + "." + choice_id + ".app", "Add " + str(choice.get("title", "")) + " as app",
+			"Controller pointer", WindowsInstall.register_local.bind(key, choice_id, "pointer"))
 
 
 func _add_source_row(source: Dictionary) -> void:

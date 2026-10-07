@@ -11,9 +11,11 @@ script="${PC1_BROWSER_TEST_SCRIPT:-browser_engine.gd}"
 # Exercise the current shell sources with the locally built extension. Import
 # registers the GDExtension even when a build cleared the .godot directory.
 test -s "$work/project/bin/libmowser.so"
+mkdir -p "$work/runtime-home/player"
 cp -a "$repo/shell/src/." "$work/project/src/"
 cp "$repo/shell/project.godot" "$work/project/project.godot"
 podman run --rm --network=none \
+    -e HOME=/var/home/player -v "$work/runtime-home:/var/home" \
     -v "$work:/work" -v "$editor:/editor:ro" \
     -v "$work/payload:/usr/lib/marwanos/mowser:ro" \
     --entrypoint /usr/bin/timeout "$runtime" 120 /editor \
@@ -47,6 +49,7 @@ if [[ "${PC1_BROWSER_DEBUG:-0}" == 1 ]]; then
     runner=(/usr/bin/gdb --batch -ex 'set pagination off' -ex 'set debuginfod enabled off' -ex run -ex 'info sharedlibrary' -ex 'x/10i $pc-16' -ex 'info registers' -ex 'bt 24' --args /editor)
 fi
 podman run --rm --name "$container" --network=host --user 0 \
+    -e HOME=/var/home/player \
     -e "DISPLAY=127.0.0.1$display" -e LIBGL_ALWAYS_SOFTWARE=1 \
     -e MARWANOS_SHELL_WINDOWED=1 -e MARWANOS_MOWSER_NO_SANDBOX=1 \
     -e MARWANOS_SHELL_FILES_HOME=/work/fixtures \

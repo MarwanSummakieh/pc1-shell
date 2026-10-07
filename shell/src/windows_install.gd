@@ -60,7 +60,7 @@ func guided_install(path: String) -> void:
 	if path == guided_source and _guided_pid > 0:
 		resume_guided()
 		return
-	if is_busy() or not Launcher.current_entry().is_empty():
+	if is_busy() or (not Launcher.current_entry().is_empty() and not Launcher.is_minimized()):
 		message = "Finish the current installation or close the running app first."
 		changed.emit()
 		return
@@ -126,10 +126,22 @@ func _local_finished(entry: Dictionary) -> void:
 	changed.emit()
 
 
-func register_local(key: String, choice: String) -> void:
-	if OS.create_process(helper, ["register", key, choice]) <= 0:
+func register_local(key: String, choice: String, input_mode: String = "pointer") -> void:
+	if OS.create_process(helper, ["register", key, choice, input_mode]) <= 0:
 		message = "Could not add this program. Try again."
 		changed.emit()
+
+
+func open_download(path: String) -> void:
+	if is_busy() or is_open() or (Launcher.is_busy() and not Launcher.is_minimized()):
+		return
+	_screen = InstallScreen.new()
+	_screen.source_path = path
+	_screen.source_name = path.get_file()
+	_screen.closed.connect(_finish, CONNECT_ONE_SHOT)
+	opened.emit()
+	get_tree().root.add_child(_screen)
+	guided_install.call_deferred(path)
 
 
 func confirm_remove(entry: Dictionary) -> void:
@@ -287,9 +299,10 @@ func _request(request: Dictionary) -> void:
 		DirAccess.remove_absolute(path + ".tmp")
 		message = "Could not start the request. Try again."
 	else:
-		_pending_until = Time.get_ticks_msec() + 10000
-		message = "Cancelling installation…" if request["verb"] == "cancel" else (
-			"Removing application…" if request["verb"] in ["remove", "discard"] else "Starting installation…")
+		if request["verb"] not in ["download", "download-action"]:
+			_pending_until = Time.get_ticks_msec() + 10000
+			message = "Cancelling installation…" if request["verb"] == "cancel" else (
+				"Removing application…" if request["verb"] in ["remove", "discard"] else "Starting installation…")
 		ShellLog.info("Windows request: %s" % JSON.stringify(request))
 	changed.emit()
 

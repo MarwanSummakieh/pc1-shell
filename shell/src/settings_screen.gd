@@ -42,6 +42,7 @@ const ActionRow = preload("res://src/action_row.gd")
 const WifiScreen = preload("res://src/wifi_screen.gd")
 const UpdateScreen = preload("res://src/update_screen.gd")
 const AudioScreen = preload("res://src/audio_screen.gd")
+const BluetoothPage = preload("res://src/bluetooth_page.gd")
 
 var _rows: Array = []
 var _scroll: ScrollContainer = null
@@ -56,6 +57,8 @@ var _updates_row: ActionRow = null
 var _update_screen: UpdateScreen = null
 var _audio_row: ActionRow = null
 var _audio_screen: AudioScreen = null
+var _bluetooth_row: ActionRow = null
+var _bluetooth_screen: Control = null
 
 
 func _ready() -> void:
@@ -186,6 +189,12 @@ func _ready() -> void:
 	_audio_row.activated.connect(_on_audio_row_pressed)
 	list.add_child(_audio_row)
 	_rows.append(_audio_row)
+
+	_bluetooth_row = ActionRow.new()
+	_bluetooth_row.setup("Bluetooth", "Pair and manage controllers — press A")
+	_bluetooth_row.activated.connect(_on_bluetooth_row_pressed)
+	list.add_child(_bluetooth_row)
+	_rows.append(_bluetooth_row)
 
 	# The second row that acts. Last, because it is the one that can restart
 	# the machine and should not sit under a thumb that was aiming for Wi-Fi.
@@ -437,7 +446,7 @@ func _on_launch_finished(_entry: Dictionary) -> void:
 	# screen's guard said the other way round. A launch cannot be started from
 	# under one today -- the row is unreachable while a child screen holds focus
 	# -- so this is a guard against a future arrangement rather than a live case.
-	if _wifi_screen == null and _update_screen == null and _audio_screen == null:
+	if _wifi_screen == null and _update_screen == null and _audio_screen == null and _bluetooth_screen == null:
 		set_process_unhandled_input(true)
 	# Nothing is focused after a hide, and a settings screen with no focus owner
 	# is a settings screen the pad cannot move -- the rail's _ensure_focus
@@ -501,6 +510,34 @@ func _close_audio_screen() -> void:
 			child.show()
 	set_process_unhandled_input(true)
 	_audio_row.grab_focus()
+
+
+func _on_bluetooth_row_pressed() -> void:
+	if _bluetooth_screen != null:
+		return
+	set_process_unhandled_input(false)
+	for child in get_children():
+		if child is Control:
+			child.hide()
+	_bluetooth_screen = BluetoothPage.new()
+	_bluetooth_screen.closed.connect(func(): _close_bluetooth_screen.call_deferred())
+	add_child(_bluetooth_screen)
+	Bluetooth.request("refresh")
+
+
+func _close_bluetooth_screen() -> void:
+	if _bluetooth_screen == null:
+		return
+	Bluetooth.request("close")
+	var screen := _bluetooth_screen
+	_bluetooth_screen = null
+	remove_child(screen)
+	screen.queue_free()
+	for child in get_children():
+		if child is Control:
+			child.show()
+	set_process_unhandled_input(true)
+	_bluetooth_row.grab_focus()
 
 
 func _close_wifi_screen() -> void:

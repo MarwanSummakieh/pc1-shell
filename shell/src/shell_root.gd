@@ -18,11 +18,8 @@ extends Control
 ## CAME FROM, which is the entire point of putting the seam there. Only card.gd
 ## looks, and only to print a caption.
 ##
-## WHAT DID NOT COME BACK: the full-bleed hero artwork behind the rail, its
-## crossfade, its cache and its debounce -- about 400 lines whose whole job was
-## to repaint the screen behind the selection. The accent wash on each card is
-## what is left of it, and it is derived from the id rather than sampled from a
-## picture, so it needs no artwork to exist.
+## Metadata supplies the selected game's title, facts, description and backdrop.
+## The bounded artwork cache keeps selection changes from retaining every image.
 ##
 ## TWO INVARIANTS, and they outlived the rail's absence so they are written
 ## here rather than left implicit:
@@ -50,9 +47,13 @@ const IconButton = preload("res://src/icon_button.gd")
 const AppOverlay = preload("res://src/app_overlay.gd")
 const ListMenu = preload("res://src/list_menu.gd")
 const ErrorScreen = preload("res://src/error_screen.gd")
+const GameDetails = preload("res://src/game_details.gd")
+const GameSummary = preload("res://src/game_summary.gd")
+const Icons = preload("res://src/icons.gd")
 const ProcessPill = preload("res://src/process_pill.gd")
 const ProcessMenu = preload("res://src/process_menu.gd")
 const StatusCorner = preload("res://src/status_corner.gd")
+const AchievementToast = preload("res://src/achievement_toast.gd")
 
 ## How long after Down carried focus off the bar a card refuses to open its
 ## details panel. Comfortably past
@@ -63,6 +64,11 @@ const StatusCorner = preload("res://src/status_corner.gd")
 const BAR_RETURN_GRACE_MSEC := 550
 
 var _hero: ColorRect = null
+var _hero_art: TextureRect = null
+var _hero_art_path := ""
+var _hero_art_cache: Dictionary = {}
+var _game_summary: GameSummary = null
+var _summary_row: Control = null
 
 ## The rows a fullscreen sheet covers, hidden together rather than painted over
 ## -- see _set_lower_deck_visible. `_title_block` is the empty-library sentence
@@ -88,12 +94,9 @@ var _app_alert_timer: Timer = null
 var _open_hint: Control = null
 var _options_hint: Control = null
 var _overlay: AppOverlay = null
-## The details panel. ALWAYS NULL TODAY -- details_panel.gd went with the rail,
-## and nothing opens one. Typed as Control rather than as the deleted class, and
-## kept rather than removed, because three guards read it to mean "a sheet is
-## covering the lower deck": _bar_input_live, _unhandled_input and the B
-## handler. Whatever renders the sources will set it again, and until then the
-## guards are correct for free.
+var _achievement_toast: AchievementToast = null
+## The details screen is opened from Down on a library card.
+## It hides the rail and returns focus to the selected installation on Back.
 var _details: Control = null
 ## The bar's focusable cluster, in the order they sit. Kept as one array as
 ## well as four members because every wiring loop below wants "all of them" --
@@ -170,6 +173,8 @@ func _ready() -> void:
 	Info.info_closed.connect(_on_surface_closed)
 	WindowsInstall.opened.connect(_on_surface_opened)
 	WindowsInstall.closed.connect(_on_surface_closed)
+	DownloadInstall.opened.connect(_on_surface_opened)
+	DownloadInstall.closed.connect(_on_surface_closed)
 	WindowsInstall.changed.connect(_on_windows_changed)
 	WindowsInstall.guided_finished.connect(_on_guided_setup_return)
 	WindowsInstall.guided_backgrounded.connect(_on_guided_setup_return)
@@ -246,10 +251,13 @@ func _build() -> void:
 	_hero.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_hero)
 
-	# The hero art layer went with the rail: a picture of the selected entry
-	# needs a selected entry, and there is no library to select from until the
-	# sources land. The wash above stays, so the screen is a deliberate colour
-	# rather than an accident.
+	_hero_art = TextureRect.new()
+	_hero_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_hero_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_hero_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_hero_art.modulate = Color(1, 1, 1, 0.28)
+	_hero_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_hero_art)
 
 	# Darkens the lower part of the surface so the title and rail keep their
 	# contrast whatever the accent is. Anchored to the bottom and given a
@@ -314,6 +322,9 @@ func _build() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(spacer)
+	_game_summary = GameSummary.new()
+	_summary_row = _inset(_game_summary)
+	column.add_child(_summary_row)
 
 	# THE PLACEHOLDER AND THE RAIL ARE BOTH BUILT, and only one of them is ever
 	# visible -- see _refresh_empty_state. A machine with nothing installed gets
@@ -383,9 +394,8 @@ func _build_rail() -> Control:
 
 ## Build one card per entry, in the order the seam supplied them.
 ##
-## ORDER IS THE SCANNER'S, not this screen's. appscan decides what the library
-## looks like; a second sort here would mean two answers to "where is my game"
-## and the one a person learns is whichever they saw first.
+## Installed supplies recently played order. Unplayed entries retain scanner
+## order, and _on_apps_changed restores the selected installation by stable ID.
 func _populate() -> void:
 	for card in _cards:
 		_rail.remove_child(card)
@@ -396,6 +406,7 @@ func _populate() -> void:
 		var card := Card.new()
 		card.setup(entry)
 		card.selected.connect(_on_card_selected)
+		card.details_requested.connect(_open_details.bind(entry))
 		_rail.add_child(card)
 		_cards.append(card)
 
@@ -412,6 +423,8 @@ func _on_card_selected(entry: Dictionary) -> void:
 		_selected_card.set_selected_size(false)
 	_selected_card = card
 	card.set_selected_size(true)
+	_game_summary.show_entry(entry)
+	_update_hero_art(entry)
 
 	_scroll_to_selected()
 	# The bar's way back down has to follow the cursor, or Down from the bar
@@ -422,6 +435,31 @@ func _on_card_selected(entry: Dictionary) -> void:
 			button.focus_neighbor_bottom = button.get_path_to(card)
 
 	ShellLog.info("selected %s" % str(entry.get("id", "")))
+
+
+func _update_hero_art(entry: Dictionary) -> void:
+	var assets: Dictionary = entry.get("metadata", {}).get("assets", {})
+	var path := str(assets.get("background", {}).get("path", ""))
+	if path.is_empty():
+		path = str(assets.get("header", {}).get("path", ""))
+	if path == _hero_art_path:
+		return
+	_hero_art_path = path
+	_hero_art.texture = null
+	if path.is_empty():
+		return
+	if not _hero_art_cache.has(path):
+		var image := Icons.load_icon_image(path)
+		if image == null:
+			return
+		# Bound backdrop memory even when the provider supplies very large art.
+		var ratio := minf(1.0, minf(1920.0 / image.get_width(), 1080.0 / image.get_height()))
+		if ratio < 1.0:
+			image.resize(maxi(1, roundi(image.get_width() * ratio)), maxi(1, roundi(image.get_height() * ratio)))
+		if _hero_art_cache.size() >= 4:
+			_hero_art_cache.erase(_hero_art_cache.keys()[0])
+		_hero_art_cache[path] = ImageTexture.create_from_image(image)
+	_hero_art.texture = _hero_art_cache[path]
 
 
 ## Park the selected card's left edge on the safe margin by sliding the STRIP,
@@ -449,6 +487,11 @@ func _scroll_to_selected() -> void:
 ## Exactly one of the rail and the empty-library sentence is visible.
 func _refresh_empty_state() -> void:
 	var has_library := not _cards.is_empty()
+	if _summary_row != null:
+		_summary_row.visible = has_library
+	if not has_library and _hero_art != null:
+		_hero_art.texture = null
+		_hero_art_path = ""
 	if _rail_row != null:
 		_rail_row.visible = has_library
 	if _title_block != null:
@@ -464,8 +507,11 @@ func _refresh_empty_state() -> void:
 func _on_apps_changed(_apps: Array) -> void:
 	var focused_id := ""
 	var owner := get_viewport().gui_get_focus_owner()
-	if owner != null and _cards.has(owner):
+	var rail_focused := owner != null and _cards.has(owner)
+	if rail_focused:
 		focused_id = str(owner.entry.get("id", ""))
+	elif is_instance_valid(_last_focused) and _cards.has(_last_focused):
+		focused_id = str(_last_focused.entry.get("id", ""))
 
 	_populate()
 	_wire_focus_neighbours()
@@ -477,7 +523,9 @@ func _on_apps_changed(_apps: Array) -> void:
 			restored = card
 			break
 	if restored != null:
-		restored.grab_focus()
+		_last_focused = restored
+		if visible and rail_focused:
+			restored.grab_focus()
 	else:
 		_ensure_focus()
 
@@ -626,6 +674,7 @@ func _build_hints() -> Control:
 	# how a person learns that, and the top bar's icons still take an A.
 	_open_hint = TvTheme.hint("A", "Open")
 	hints.add_child(_open_hint)
+	hints.add_child(TvTheme.hint("↓", "Details"))
 	# OPTIONS is the only route to removing an application on a machine with no
 	# terminal, so it is advertised rather than left to be discovered. Hidden
 	# with the A hint when the rail is empty -- there is nothing to have options
@@ -754,10 +803,41 @@ func _on_launch_blocked(detail: String) -> void:
 
 
 func _on_system_notification(entry: Dictionary) -> void:
-	# Store every notification centrally; show a brief alert only on home.
-	# Never focus or expose the shell over a running application.
+	# The inbox remains authoritative. Achievements earned while a game draws
+	# also get a separate passive surface without taking the game input lease.
+	if str(entry.get("app", "")) == "Achievements" and Launcher.is_busy() and Launcher.app_on_screen() and _overlay == null:
+		_show_achievement_toast(entry)
+		return
 	if visible and not Launcher.is_busy() and not Info.is_open():
 		_on_launch_blocked("%s: %s" % [str(entry.get("app", "")), str(entry.get("summary", ""))])
+
+
+func _show_achievement_toast(entry: Dictionary) -> void:
+	_dismiss_achievement_toast()
+	_achievement_toast = AchievementToast.new()
+	get_tree().root.add_child(_achievement_toast)
+	_achievement_toast.expired.connect(_on_achievement_toast_expired.bind(_achievement_toast), CONNECT_ONE_SHOT)
+	if not _achievement_toast.present(entry):
+		_dismiss_achievement_toast()
+
+
+func _dismiss_achievement_toast() -> void:
+	if _achievement_toast == null:
+		return
+	var toast := _achievement_toast
+	_achievement_toast = null
+	toast.retire()
+
+
+func _on_achievement_toast_expired(toast: AchievementToast) -> void:
+	if _achievement_toast == toast:
+		_dismiss_achievement_toast()
+	else:
+		toast.retire()
+
+
+func _exit_tree() -> void:
+	_dismiss_achievement_toast()
 
 
 func _on_windows_changed() -> void:
@@ -771,6 +851,7 @@ func _on_windows_changed() -> void:
 
 
 func _on_launch_finished(_entry: Dictionary) -> void:
+	_dismiss_achievement_toast()
 	if is_instance_valid(_process_pill):
 		_process_pill.visible = Launcher.is_minimized() or not Services.visible_services().is_empty()
 		_on_pill_membership_changed([])
@@ -1048,6 +1129,9 @@ func _hide_bar() -> void:
 
 
 func _open_overlay() -> void:
+	# gamescope selects one external overlay. Retire the passive surface before
+	# Home maps the interactive one, so it cannot cover the menu or keep a lease.
+	_dismiss_achievement_toast()
 	Kiosk.remember_app_window(str(Launcher.current_entry().get("input_mode", "")) == "pointer")
 	Launcher.set_pad_keys_paused(true)
 	Launcher.set_splash_paused(true)
@@ -1124,6 +1208,26 @@ func _set_lower_deck_visible(shown: bool) -> void:
 	for node in [_title_block, _rail_row, _hint_row]:
 		if is_instance_valid(node):
 			node.visible = shown
+
+
+func _open_details(entry: Dictionary) -> void:
+	if not visible or _details != null or _process_menu != null or Launcher.is_busy():
+		return
+	_details = GameDetails.new()
+	_details.entry = entry
+	_details.closed.connect(func(): _close_details.call_deferred(), CONNECT_ONE_SHOT)
+	_hand_screen_over()
+	get_tree().root.add_child(_details)
+
+
+func _close_details() -> void:
+	if _details == null:
+		return
+	_details.get_parent().remove_child(_details)
+	_details.queue_free()
+	_details = null
+	if not Launcher.is_busy():
+		_take_screen_back()
 
 
 ## The processes menu, from the pill in the bar's left corner. Same guards as
