@@ -114,6 +114,7 @@ func _run() -> void:
 	audio_row.grab_focus()
 	await press("ui_accept")
 	check(overlay._volume_popup != null and overlay._menu.visible, "Home menu opens volume above the visible menu")
+	await capture("app-volume")
 	await press("ui_cancel")
 	await process_frame
 	check(overlay._volume_popup == null and overlay._menu.visible, "Back closes only the volume popup")
@@ -132,6 +133,7 @@ func _run() -> void:
 	await process_frame
 	check(popup._panel.get_global_rect().end.y < home._audio_button.global_position.y, "volume popup sits above its Audio button")
 	check(popup._slider.has_focus() and popup._slider.value == 50, "popup focuses current output volume")
+	await capture("home-volume")
 	await press("ui_right")
 	await create_timer(0.12).timeout
 	check(_audio.pending and popup._slider.value == 55, "controller volume updates without jumping while pending")
@@ -207,3 +209,12 @@ func _run() -> void:
 	DirAccess.remove_absolute(_folder)
 	print("Audio shell checks: %d failure(s)" % failures)
 	quit(1 if failures else 0)
+
+
+func capture(name_text: String) -> void:
+	var folder := OS.get_environment("MARWANOS_VOLUME_CAPTURE")
+	if folder.is_empty() or DisplayServer.get_name() == "headless":
+		return
+	await process_frame
+	RenderingServer.force_draw(false)
+	root.get_texture().get_image().save_png(folder.path_join(name_text + ".png"))

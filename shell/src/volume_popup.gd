@@ -23,6 +23,11 @@ func _ready() -> void:
 	_panel = PanelContainer.new()
 	var box := TvTheme.card_art_box(TvTheme.SURFACE)
 	box.set_content_margin_all(20)
+	box.set_border_width_all(1)
+	box.border_color = TvTheme.TEXT_SECONDARY.darkened(0.55)
+	box.shadow_color = Color(0, 0, 0, 0.35)
+	box.shadow_size = 8
+	box.shadow_offset = Vector2(0, 4)
 	_panel.add_theme_stylebox_override("panel", box)
 	add_child(_panel)
 	var column := VBoxContainer.new()
@@ -58,6 +63,9 @@ func _ready() -> void:
 		track.content_margin_bottom = 4
 		_slider.add_theme_stylebox_override(style, track)
 	_slider.add_theme_stylebox_override("focus", TvTheme.card_focus_ring())
+	_slider.draw.connect(_draw_slider_focus)
+	_slider.focus_entered.connect(_slider.queue_redraw)
+	_slider.focus_exited.connect(_slider.queue_redraw)
 	_slider.value_changed.connect(_volume_changed)
 	column.add_child(_slider)
 	_status = Label.new()
@@ -132,6 +140,11 @@ func _refresh() -> void:
 
 func _update_value() -> void:
 	_value.text = "%d%%" % int(_slider.value)
+
+
+func _draw_slider_focus() -> void:
+	if _slider.has_focus():
+		_slider.draw_style_box(TvTheme.card_focus_ring(), Rect2(Vector2.ZERO, _slider.size))
 
 
 func _volume_changed(value: float) -> void:
