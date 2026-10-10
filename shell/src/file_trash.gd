@@ -3,6 +3,7 @@ extends RefCounted
 ## Home trash uses freedesktop metadata, so Files and desktop recovery agree.
 ## Renames are atomic; a failed trash never falls back to permanent deletion.
 const Transfer = preload("res://src/file_transfer.gd")
+const LOCATION := "trash://"
 
 static func trash_root() -> String:
 	var data := OS.get_environment("XDG_DATA_HOME")
@@ -82,3 +83,66 @@ static func restore(id: String) -> Dictionary:
 		return {"ok": false, "message": "Could not restore %s; its original folder must be on the same drive" % original.get_file()}
 	DirAccess.remove_absolute(trash_root().path_join("info").path_join(id + ".trashinfo"))
 	return {"ok": true, "message": "Restored %s" % destination.get_file(), "path": destination}
+
+
+static func has_contents() -> bool:
+	for folder in ["files", "info"]:
+		var dir := DirAccess.open(trash_root().path_join(folder))
+		if dir != null:
+			dir.include_hidden = true
+			if not dir.get_files().is_empty() or not dir.get_directories().is_empty():
+				return true
+	return false
+
+
+static func empty() -> Dictionary:
+	var root := trash_root().replace("\\", "/").simplify_path()
+	if not root.is_absolute_path() or Transfer.has_link_parent(root):
+		return {"ok": false, "message": "Trash bin location is unavailable"}
+	for folder in ["files", "info"]:
+		if Transfer.has_link_parent(root.path_join(folder)):
+			return {"ok": false, "message": "Trash bin location is unavailable"}
+	var failures := 0
+	var files := root.path_join("files")
+	var dir := DirAccess.open(files)
+	if dir == null and DirAccess.dir_exists_absolute(files):
+		return {"ok": false, "message": "Trash bin files are unavailable"}
+	if dir != null:
+		dir.include_hidden = true
+		var names: Array = Array(dir.get_files()) + Array(dir.get_directories())
+		for name in names:
+			if _remove_entry(files.path_join(str(name)), root) != OK:
+				failures += 1
+	# Keep metadata for anything that could not be removed, so it can still be restored.
+	var info := root.path_join("info")
+	dir = DirAccess.open(info)
+	if dir == null and DirAccess.dir_exists_absolute(info):
+		return {"ok": false, "message": "Trash bin metadata is unavailable"}
+	if dir != null:
+		dir.include_hidden = true
+		var names: Array = Array(dir.get_files()) + Array(dir.get_directories())
+		for name in names:
+			var id := str(name).trim_suffix(".trashinfo")
+			if not Transfer.exists(files.path_join(id)) and _remove_entry(info.path_join(str(name)), root) != OK:
+				failures += 1
+	var ok := failures == 0 and not has_contents()
+	return {"ok": ok, "message": "Trash bin emptied" if ok else "Some items could not be removed from the trash bin"}
+
+
+static func _remove_entry(path: String, root: String) -> int:
+	# Only descendants of this trash root may be removed. Unlink symlinks themselves.
+	var target := path.replace("\\", "/").simplify_path()
+	if not target.begins_with(root + "/") or Transfer.has_link_parent(target.get_base_dir()):
+		return ERR_INVALID_PARAMETER
+	if Transfer.is_link(target) or not DirAccess.dir_exists_absolute(target):
+		return DirAccess.remove_absolute(target)
+	var dir := DirAccess.open(target)
+	if dir == null:
+		return DirAccess.get_open_error()
+	dir.include_hidden = true
+	var names: Array = Array(dir.get_files()) + Array(dir.get_directories())
+	for name in names:
+		var error := _remove_entry(target.path_join(str(name)), root)
+		if error != OK:
+			return error
+	return DirAccess.remove_absolute(target)

@@ -50,7 +50,7 @@ func open() -> void:
 		# top would stack two surfaces that both restore the rail on close, and
 		# whichever closed second would restore it twice.
 		return
-	if Power.is_open() or Info.is_open() or Files.is_open() or Browser.is_open() or WindowsInstall.is_open():
+	if Power.is_open() or Info.is_open() or Files.is_open() or Browser.is_open() or WindowsInstall.is_open() or Downloads.is_open():
 		# The shell surfaces are peers, not layers: whichever is up owns the
 		# screen until it closes. (The others hold the mirror guards.)
 		return

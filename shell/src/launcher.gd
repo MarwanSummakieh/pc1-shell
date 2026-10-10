@@ -64,6 +64,52 @@ const PAD_KEY_APPS := {}
 
 var _current: Dictionary = {}
 var _minimized := false
+var _embedded_steam_game := false
+
+
+func _ready() -> void:
+	var history_timer := Timer.new()
+	history_timer.wait_time = 1.0
+	history_timer.autostart = true
+	history_timer.timeout.connect(_sample_history)
+	add_child(history_timer)
+
+
+func _sample_history() -> void:
+	if _current.is_empty():
+		return
+	var foreground := _app_on_screen and not _minimized and not _pad_keys_paused and not _closing and not _terminating
+	if foreground:
+		foreground = Kiosk.focused_window(_pid, str(_current.get("prefix", ""))) == Kiosk.Focus.ELSEWHERE
+	if foreground:
+		var window := _history_foreground_window()
+		if _handoff:
+			var output: Array = []
+			foreground = window > 0 and OS.execute("xprop", ["-id", str(window), "-notype", "STEAM_GAME"], output, true) == 0 and not output.is_empty() and _history_steam_matches(str(output[0]), str(_current.get("id", "")).trim_prefix(HANDOFF_PREFIX))
+		else:
+			foreground = _pid > 0 and OS.is_process_running(_pid) and window > 0 and Kiosk._window_belongs_to_app(window, _pid)
+	PlayHistory.sample(Metadata.enrich(_current), foreground)
+
+
+func _history_foreground_window() -> int:
+	var output: Array = []
+	if OS.execute("xprop", ["-root", "-notype", Kiosk._focus_property()], output, true) != 0 or output.is_empty():
+		return 0
+	var text := str(output[0])
+	var value := text.get_slice("=", 1) if text.contains("=") else text.get_slice(":", 1)
+	for word in value.replace(",", " ").split(" ", false):
+		var token := word.strip_edges()
+		var id := token.hex_to_int() if token.begins_with("0x") else token.to_int()
+		if id > 0:
+			return id
+	return 0
+
+
+func _history_steam_matches(property_text: String, app_id: String) -> bool:
+	if not app_id.is_valid_int() or not property_text.contains("="):
+		return false
+	var value := property_text.get_slice("=", 1).strip_edges()
+	return value.is_valid_int() and value.to_int() == app_id.to_int()
 
 # Typed as the script rather than as Control so `entry` and `closed` resolve
 # statically -- GDScript treats a missing member on a typed variable as an error,
@@ -113,8 +159,32 @@ func current_entry() -> Dictionary:
 	return _current.duplicate()
 
 
+## Steam's own library can start a game without a shell launch request.
+## Adopt that observed game into the ordinary Home/minimize/close lifecycle.
+func adopt_steam_game(entry: Dictionary) -> void:
+	if not _current.is_empty():
+		return
+	_current = entry.duplicate()
+	_embedded_steam_game = true
+	_pid = -1
+	_handoff = true
+	_handoff_seen = true
+	_handoff_shell_ticks = 0
+	_gamescope_answered = true
+	launch_started.emit(_current)
+	_start_watchdog()
+	_app_is_up()
+
+
 ## The only way anything gets launched.
 func launch(entry: Dictionary) -> void:
+	if Profiles.is_open() or not Profiles.available:
+		blocked.emit(Profiles.error if not Profiles.available else "Choose a user before playing.")
+		return
+	var profile_error := Profiles.launch_error(entry)
+	if not profile_error.is_empty():
+		blocked.emit(profile_error)
+		return
 	if entry.has("executable") and not FileAccess.file_exists(str(entry.get("executable", ""))):
 		blocked.emit("%s is unavailable. Reconnect its drive or remove the app." % str(entry.get("title", "App")))
 		return
@@ -219,6 +289,11 @@ func _spawn(exec: Array) -> void:
 		var word := str(exec[i])
 		word = word.replace("{W}", str(screen.x)).replace("{H}", str(screen.y))
 		args.append(word)
+	# Windows helpers scope their saves; Steam keeps the shared console session. Ordinary
+	# Linux games receive a private HOME while their installed binaries stay put.
+	if PlayHistory.is_game(Metadata.enrich(_current)) and not str(_current.get("id", "")).begins_with(HANDOFF_PREFIX) and not program in ["/usr/lib/marwanos/steamctl", "/usr/lib/marwanos/windows/manager.py", "/usr/lib/marwanos/winrun"] and OS.has_feature("linux"):
+		args = PackedStringArray([Profiles.helper_path(), "run", Profiles.active, "--", program]) + args
+		program = "/usr/bin/python3"
 
 	ShellLog.info("spawning %s %s" % [program, " ".join(args)])
 	_close_escalate_ticks = 0
@@ -392,6 +467,25 @@ func _start_watchdog() -> void:
 
 func _check_window() -> void:
 	_watched_seconds += WINDOW_POLL_SECONDS
+	if _handoff and not _embedded_steam_game and int(SteamEmbed.snapshot.get("client", 0)) > 0 \
+			and int(SteamEmbed.snapshot.get("game_id", 0)) == str(_current.get("id", "")).trim_prefix(HANDOFF_PREFIX).to_int() \
+			and Time.get_unix_time_from_system() - float(SteamEmbed.snapshot.get("heartbeat", 0)) < 3:
+		_embedded_steam_game = true
+		_handoff_seen = true
+		_app_is_up()
+	if _embedded_steam_game:
+		# Steam can reclaim focus as a game closes. Observe the verified game
+		# window itself; the lifetime of the client is independent of this game.
+		var state: Dictionary = SteamEmbed.snapshot
+		if Time.get_unix_time_from_system() - float(state.get("heartbeat", 0)) > 3:
+			return
+		if int(state.get("game_id", 0)) == str(_current.get("id", "")).trim_prefix(HANDOFF_PREFIX).to_int():
+			_handoff_shell_ticks = 0
+			return
+		_handoff_shell_ticks += 1
+		if _handoff_shell_ticks >= HANDOFF_RETURN_TICKS:
+			_on_closed()
+		return
 
 	var focus := Kiosk.focused_window(_pid, str(_current.get("prefix", "")))
 	# Recorded on every answer that IS one, whichever branch consumes it: this is
@@ -449,6 +543,7 @@ func _app_is_up() -> void:
 	# condition. See Kiosk.yield_screen for what a second fullscreen window costs
 	# while Steam is mapping its own.
 	_app_on_screen = true
+	_sample_history()
 	ControllerRouter.set_app_input(not _pad_keys_paused and not _uses_pad_bridge())
 	Kiosk.remember_app_window(str(_current.get("input_mode", "")) == "pointer")
 	Kiosk.yield_screen(true)
@@ -577,6 +672,8 @@ func _remove_pad_keys() -> void:
 ## even while no bridge exists, so one created later starts in the right
 ## state -- see _pad_keys_paused.
 func set_pad_keys_paused(value: bool) -> void:
+	if value:
+		PlayHistory.pause()
 	ControllerRouter.set_app_input(_app_on_screen and not _minimized and not value and not _uses_pad_bridge())
 	_pad_keys_paused = value
 	if is_instance_valid(_pad_keys):
@@ -622,7 +719,8 @@ func can_close() -> bool:
 ## back underneath a window that is still there.
 ##
 ## So a flatpak entry is closed with `flatpak kill <app-id>`, which is the
-## documented way to stop a sandbox, and anything else falls back to the pid.
+## documented way to stop a sandbox. Other Linux launches close their isolated
+## process group so wrapper children cannot outlive the Close action.
 ##
 ## THE RAIL COMES BACK ON EVIDENCE, NOT ON HOPE. An earlier version armed the
 ## quiet-poll flag here and declared the process "terminated on request" on
@@ -638,6 +736,9 @@ func can_close() -> bool:
 ## makes a later is_process_running an engine ERROR in the journal.
 func close_current() -> void:
 	if _current.is_empty() or _closing:
+		return
+	if _embedded_steam_game:
+		SteamEmbed.close_game()
 		return
 	if _steam_stop_pid > 0:
 		return
@@ -719,6 +820,7 @@ func _close_steam() -> void:
 func minimize_current() -> void:
 	if _current.is_empty() or _minimized:
 		return
+	PlayHistory.pause()
 	_minimized = true
 	_app_on_screen = false
 	set_pad_keys_paused(true)
@@ -774,6 +876,16 @@ func _kill_pid() -> void:
 	if _pid <= 0:
 		return
 	ShellLog.info("terminating pid %d" % _pid)
+	# Godot starts Linux children in their own session. Wrappers such as flock
+	# and AppImage keep the game in that process group, so killing only the
+	# wrapper leaves the game alive. Verify ownership before signalling a group:
+	# a shared group must never take the shell or an unrelated app down with it.
+	if OS.has_feature("linux") and _owns_process_group(_pid):
+		var output: Array = []
+		if OS.execute("/usr/bin/kill", ["-KILL", "--", "-%d" % _pid], output, true) != 0:
+			ShellLog.error("could not terminate process group %d; keeping the application tracked" % _pid)
+			return
+		ShellLog.info("terminated application process group %d" % _pid)
 	# The quiet-poll flag is armed HERE and only here: OS.kill is what makes a
 	# later is_process_running an engine ERROR about a reaped pid, so this is
 	# the one path that must stop asking. Every other close keeps polling and
@@ -783,11 +895,27 @@ func _kill_pid() -> void:
 	# an application that ignored a polite request is exactly the case it
 	# exists for. Anything that wants a graceful shutdown should offer its own
 	# quit, as Steam does.
+	# Also reap our direct child after signalling its group.
 	var error := OS.kill(_pid)
 	if error != OK:
 		ShellLog.error("could not terminate pid %d (error %d)" % [_pid, error])
 	else:
 		_terminating = true
+
+
+func _owns_process_group(pid: int) -> bool:
+	if pid <= 1:
+		return false
+	var file := FileAccess.open("/proc/%d/stat" % pid, FileAccess.READ)
+	if file == null:
+		return false
+	var stat := file.get_line()
+	var end := stat.rfind(")")
+	if end < 0:
+		return false
+	var fields := stat.substr(end + 1).strip_edges().split(" ", false)
+	# Fields after comm: state, parent PID, process group, session.
+	return fields.size() >= 4 and fields[2].to_int() == pid and fields[3].to_int() == pid
 
 
 ## The flatpak application id anywhere in an exec, else empty. Read from the
@@ -900,6 +1028,7 @@ func _on_closed() -> void:
 func _finish() -> void:
 	if _current.is_empty():
 		return
+	PlayHistory.finish("exited")
 	var entry := _current
 	_current = {}
 	_closing = false
@@ -944,6 +1073,7 @@ func _finish() -> void:
 	# would have the home button offering to close a machine that is back at the
 	# rail with nothing running.
 	_handoff = false
+	_embedded_steam_game = false
 	_handoff_seen = false
 	_handoff_shell_ticks = 0
 	_gamescope_answered = false

@@ -146,19 +146,33 @@ func run(tree: SceneTree, screen: Control, home: String, check: Callable) -> voi
 	var rect: Rect2 = keyboard.get_panel_rect()
 	check.call(rect.size.x <= 600 and rect.size.y <= 520, "text keyboard fits within a compact readable panel")
 	check.call(not keyboard._entry.text.contains("private"), "password draft remains masked")
+	check.call(keyboard._flat.size() == 40, "four letter rows keep the floating keyboard compact")
+	keyboard._on_symbols()
+	check.call(keyboard._flat[10].text == "!" and keyboard._symbols_key.text == "ABC", "symbols are available without adding a permanent row")
+	keyboard._on_symbols()
+	check.call(keyboard._flat[10].text == "q", "letters return without moving key focus")
 	var owner := tree.root.gui_get_focus_owner()
-	var axis := InputEventJoypadMotion.new()
-	axis.device = tree.root.get_node("PlayerOne").device
-	axis.axis = JOY_AXIS_RIGHT_X
-	axis.axis_value = -0.9
-	Input.parse_input_event(axis)
+	var router := tree.root.get_node("ControllerRouter")
+	var player := tree.root.get_node("PlayerOne")
+	var axes: Array = router._axes.duplicate()
+	axes[JOY_AXIS_RIGHT_X] = -0.9
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": router._buttons.duplicate(), "axes": axes})
 	await tree.process_frame
 	await tree.process_frame
 	check.call(keyboard.get_panel_rect().position.x < rect.position.x and tree.root.gui_get_focus_owner() == owner, "right stick moves the keyboard without moving key focus")
-	axis = axis.duplicate()
-	axis.axis_value = 0.0
-	Input.parse_input_event(axis)
+	# Cross at least one real reconciliation timeout with the stick held. The
+	# production native-disconnect guard must retain a routed player and motion.
+	await tree.create_timer(player.RECONCILE_SECONDS + 0.1).timeout
+	check.call(player.device == router.DEVICE and player.guid == "pc1-controller-router"
+		and is_equal_approx(player.axis(JOY_AXIS_RIGHT_X), -0.9)
+		and keyboard.get_panel_rect().position.x < rect.position.x
+		and tree.root.gui_get_focus_owner() == owner, "routed keyboard movement and key focus survive the real controller reconciliation timer")
+	axes[JOY_AXIS_RIGHT_X] = 0.0
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": router._buttons.duplicate(), "axes": axes})
 	await tree.process_frame
+	check.call(is_zero_approx(player.axis(JOY_AXIS_RIGHT_X)), "routed right-stick release neutralizes keyboard movement")
 	keyboard.move_panel(Vector2(-10000, -10000))
 	check.call(keyboard.get_panel_rect().position == Vector2.ONE * Keyboard.PANEL_GAP and tree.root.gui_get_focus_owner() == owner, "moving keyboard clamps to viewport and preserves text navigation focus")
 	keyboard.move_panel(Vector2(10000, 10000))
@@ -190,6 +204,13 @@ func run(tree: SceneTree, screen: Control, home: String, check: Callable) -> voi
 	keyboard._move_caret(-1)
 	keyboard._on_backspace()
 	check.call(inserts == ["hello"] and edits == ["Left", "BackSpace"] and keyboard._text.is_empty(), "live browser keyboard forwards text and caret edits without storing a draft")
+	check.call(not keyboard._entry.visible, "live typing leaves its readback in the original field")
+	for viewport in [Vector2i(1280, 720), Vector2i(900, 720), Vector2i(400, 600)]:
+		tree.root.size = viewport
+		await tree.process_frame
+		await tree.process_frame
+		check.call(tree.root.get_visible_rect().encloses(keyboard.get_panel_rect()), "floating keyboard fits a %dx%d viewport" % [viewport.x, viewport.y])
+	tree.root.size = Vector2i(1920, 1080)
 	tree.root.remove_child(keyboard)
 	keyboard.queue_free()
 	screen._pane().grab_pane_focus()

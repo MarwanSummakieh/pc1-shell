@@ -25,6 +25,7 @@
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
+#include <godot_cpp/variant/rect2.hpp>
 
 #include "mowser_client.h"
 
@@ -60,6 +61,17 @@ public:
     // --- Whether there is an engine at all, for the shell's honest sentence.
     bool is_engine_running() const;
     godot::String get_engine_failure() const;
+    bool set_extension_paths(const godot::PackedStringArray &paths);
+    godot::PackedStringArray get_active_extension_paths() const;
+    bool open_extensions(bool manage);
+    bool open_extension_page(const godot::String &url);
+    godot::String get_extension_page_url() const;
+    bool is_extension_window_open() const;
+    void extension_command(const godot::String &command);
+    void set_extension_panel_rect(const godot::Rect2 &bounds);
+    int64_t get_extension_panel_handle() const;
+    void extension_type_text(const godot::String &text);
+    void extension_editing_key(const godot::String &key_name);
 
     // --- Input, in this control's own pixel space.
     void set_pointer(const godot::Vector2 &position);
@@ -77,7 +89,7 @@ public:
     // The editing keys a keyboard would send that are not characters:
     // "Return", "BackSpace", "Tab", "Up", "Down", "Left", "Right", "Escape".
     void send_editing_key(const godot::String &key_name);
-    void reveal_focused_field();
+    void reveal_focused_field(const godot::Rect2 &occlusion);
     void set_download_directory(const godot::String &path);
     void cancel_download(int64_t id);
     void respond_file_dialog(const godot::PackedStringArray &paths);

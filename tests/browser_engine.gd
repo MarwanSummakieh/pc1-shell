@@ -22,7 +22,15 @@ func wait_title(expected: String) -> bool:
 
 func focus_field(y: float, expected_type: String, expected_mode: String = "") -> bool:
 	web._close_keyboard()
-	web._view.set_pointer(Vector2(90, y))
+	# The inset browser window is shorter than the fixture document. Start from
+	# its top and scroll each target into the current content viewport.
+	web._view.scroll(Vector2(0, 4000))
+	await create_timer(0.2).timeout
+	var offset := maxf(0, y - web._view.size.y + 100)
+	if offset > 0:
+		web._view.scroll(Vector2(0, -offset))
+		await create_timer(0.2).timeout
+	web._view.set_pointer(Vector2(90, y - offset))
 	web._click(true)
 	await create_timer(0.2).timeout
 	check(web._keyboard == null, "field focus waits for click release")
@@ -71,7 +79,7 @@ func _run() -> void:
 		return
 	web._keyboard._insert("Controller text")
 	check(await wait_title("Typed:Controller text"), "keyboard text reaches the page before Done")
-	check(web._view.get_global_rect().end.x < web._keyboard._panel.get_global_rect().position.x, "page and keyboard do not overlap")
+	check(web._view.get_rect() == web._page_bounds, "floating keyboard preserves the page viewport")
 	web._keyboard._on_done()
 	await create_timer(0.2).timeout
 	check(web._view.get_page_title() == "Typed:Controller text", "Done does not duplicate live text")
@@ -100,7 +108,7 @@ func _run() -> void:
 		check(web._keyboard._text.is_empty(), "shell does not retain live password text")
 	check(await focus_field(530, "email"), "email context is detected")
 	if web._keyboard != null:
-		check(web._keyboard._flat[41].text == ".com" and web._keyboard.done_label == "Next", "email shortcuts and Next follow field context")
+		check(web._keyboard._flat[39].text == ".com" and web._keyboard.done_label == "Next", "email shortcuts and Next follow field context")
 		web._keyboard._on_done()
 		await create_timer(0.5).timeout
 		check(web._keyboard != null and web._keyboard.input_context == "numeric", "Next focuses the following field and updates the keyboard")

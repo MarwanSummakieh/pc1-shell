@@ -1,4 +1,5 @@
 #include "mowser_client.h"
+#include "mowser_extensions.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -214,10 +215,17 @@ bool Client::OnBeforeBrowse(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
     CefRefPtr<CefRequest> request, bool, bool) {
     if (!frame->IsMain()) return false;
     std::string url = request->GetURL().ToString();
+    // The OSR/Alloy view cannot host Chromium's native install prompt. Route
+    // store navigation through the same-profile Chrome window before it loads.
+    if (is_extension_store_url(url)) {
+        open_extension_window(url);
+        return true;
+    }
     if (frame->IsMain()) cancel_dialogs();
     std::transform(url.begin(), url.end(), url.begin(), [](unsigned char c) { return std::tolower(c); });
     const bool allowed = url.starts_with("https://") || url.starts_with("http://") ||
-        url.starts_with("file://") || url == "about:blank" || url.starts_with("about:blank#") || url.starts_with("blob:");
+        url.starts_with("file://") || url.starts_with("chrome-extension://") ||
+        url == "about:blank" || url.starts_with("about:blank#") || url.starts_with("blob:");
     if (!allowed && sink_ && frame->IsMain())
         sink_->sink_load_failed(request->GetURL().ToString(), "unsupported address type");
     return !allowed;

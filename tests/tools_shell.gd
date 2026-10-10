@@ -13,24 +13,24 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func press(button: int) -> void:
-	var event := InputEventJoypadButton.new()
-	event.device = 0
-	event.button_index = button
-	event.pressed = true
-	Input.parse_input_event(event)
+	var router := root.get_node("ControllerRouter")
+	var buttons: Array = router._buttons.duplicate()
+	buttons[button] = true
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": buttons, "axes": router._axes.duplicate()})
 	await process_frame
-	event = event.duplicate()
-	event.pressed = false
-	Input.parse_input_event(event)
+	buttons[button] = false
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": buttons, "axes": router._axes.duplicate()})
 	await process_frame
 	await process_frame
 
 func trigger(axis: int, value: float) -> void:
-	var event := InputEventJoypadMotion.new()
-	event.device = 0
-	event.axis = axis
-	event.axis_value = value
-	Input.parse_input_event(event)
+	var router := root.get_node("ControllerRouter")
+	var axes: Array = router._axes.duplicate()
+	axes[axis] = value
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": router._buttons.duplicate(), "axes": axes})
 	await process_frame
 
 func paste_one(source: String, destination: String, cut: bool) -> Dictionary:
@@ -46,7 +46,16 @@ func paste_one(source: String, destination: String, cut: bool) -> Dictionary:
 	return {"error": "", "name": str(job.completed[0]["name"])} if not job.completed.is_empty() else {"error": "Transfer did not finish"}
 
 func _run() -> void:
-	root.get_node("PlayerOne").device = 0
+	# Feed the real broker-state seam, as controller_shell.gd does. A synthetic
+	# native index has no GUID and is correctly evicted by PlayerOne's timer.
+	# Only UDP transport is paused; input ownership/reconciliation stay enabled.
+	var router := root.get_node("ControllerRouter")
+	router.set_process(false)
+	router._routed = true
+	router._apply_state({"connected": true, "name": "Tools fixture controller",
+		"buttons": [false, false, false, false, false, false, false, false,
+			false, false, false, false, false, false, false],
+		"axes": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]})
 	var home := OS.get_environment("PC1_TOOLS_TEST_HOME")
 	var shell: Control = load("res://scenes/shell_root.tscn").instantiate()
 	root.add_child(shell)
@@ -79,7 +88,33 @@ func _run() -> void:
 		"detail": "Choose the program to add to your library.",
 		"choices": [{"id": "drive_c/Program Files/Game.exe", "title": "Game", "detail": "Program Files/Game.exe"}]}]
 	installs.changed.emit()
-	check(screen._installer._rows[0].get_meta("key") == "local-review.drive_c/Program Files/Game.exe", "finished setup offers the installed executable for library selection")
+	check(screen._installer._rows[0].get_meta("key") == "local-review.drive_c/Program Files/Game.exe.game", "finished setup offers the installed executable as a game")
+	check(screen._installer._rows[1].get_meta("key") == "local-review.drive_c/Program Files/Game.exe.app", "finished setup also offers the executable as an application")
+	check(screen._installer._rows[0]._value_text == "Native controller input", "game choice explains its native controller profile")
+	check(screen._installer._rows[1]._value_text == "Controller pointer", "application choice explains its pointer profile")
+	# Exercise the real controller action and helper argv boundary without
+	# registering an application or starting Wine in this disposable UI fixture.
+	var old_helper: String = installs.helper
+	var helper_path := home.path_join("register-fixture.sh")
+	var register_helper := FileAccess.open(helper_path, FileAccess.WRITE)
+	register_helper.store_string("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n")
+	register_helper.close()
+	FileAccess.set_unix_permissions(helper_path, 448)
+	installs.helper = helper_path
+	for index in 2:
+		DirAccess.remove_absolute(helper_path + ".args")
+		screen._installer._rows[index].grab_focus()
+		await press(JOY_BUTTON_A)
+		for attempt in 10:
+			if FileAccess.file_exists(helper_path + ".args"):
+				break
+			await create_timer(0.02).timeout
+		var expected_mode := "gamepad" if index == 0 else "pointer"
+		check(FileAccess.file_exists(helper_path + ".args"), "controller choice starts the registration helper")
+		if FileAccess.file_exists(helper_path + ".args"):
+			check(FileAccess.get_file_as_string(helper_path + ".args") == "register\nlocal-review\ndrive_c/Program Files/Game.exe\n" + expected_mode + "\n",
+				"controller registration preserves the chosen executable and " + expected_mode + " profile")
+	installs.helper = old_helper
 	var generic_entry := {"id": "local-test", "title": "Setup", "state": "installed", "input_mode": "pointer"}
 	screen._installer._on_launch_started(generic_entry)
 	check(not screen.visible, "file list hides while Windows setup owns the display")
@@ -111,16 +146,22 @@ func _run() -> void:
 	screen._open_browser(screen._pane(), home.path_join("destination/example.txt"), "example.txt")
 	await process_frame
 	check(screen._modal_open() and root.gui_get_focus_owner() == null, "document browser releases file-list focus")
-	await press(JOY_BUTTON_BACK)
-	check(screen._browser == null and files.is_open(), "Share closes document and returns to files")
+	await press(JOY_BUTTON_GUIDE)
+	check(screen._browser == null and files.is_open(), "Guide closes document and returns to files")
 	files.close()
 	await process_frame
 	await process_frame
 	check(shell.visible, "closing files restores home")
-	# Reach the new tools from the controller-operated top bar.
+	# Reach the browser through its controller-operated navigation destination.
+	if not shell._bar_row.visible:
+		await press(JOY_BUTTON_GUIDE)
+	check(shell._bar_row.visible, "PS/Home reveals navigation after returning from Files")
 	var buttons: Array = shell._bar_buttons
-	check(buttons[buttons.size() - 3]._kind == "browser", "Browser uses its own top-bar icon")
-	buttons[buttons.size() - 3].grab_focus() # Browser, then Power and status.
+	var browser_button: Control = null
+	for button: Control in buttons:
+		if button.get_meta("destination", "") == "Browser": browser_button = button
+	check(browser_button != null and browser_button.glyph == "browser", "Browser uses its own navigation icon")
+	browser_button.grab_focus()
 	await press(JOY_BUTTON_A)
 	check(browser.is_open() and not shell.visible, "controller opens browser from bar")
 	var web: Control = browser._screen
@@ -134,15 +175,17 @@ func _run() -> void:
 	await press(JOY_BUTTON_START)
 	check(web._menu != null, "controller opens browser options")
 	await press(JOY_BUTTON_B)
-	await press(JOY_BUTTON_BACK)
-	check(not browser.is_open() and shell.visible, "Share returns home even without browser engine")
+	await press(JOY_BUTTON_GUIDE)
+	check(not browser.is_open() and shell.visible, "Guide returns home even without browser engine")
 	check(root.gui_get_focus_owner() != null, "return restores controller focus")
+	DirAccess.remove_absolute("user://controller_keyboard.cfg")
 	var keyboard: Control = load("res://src/keyboard.gd").new()
 	keyboard.initial_text = "cat"
 	keyboard.masked = false
 	root.add_child(keyboard)
 	await process_frame
-	check(keyboard._panel.get_global_rect().position.x > root.size.x / 2.0, "keyboard occupies the side, leaving the center clear")
+	await process_frame
+	check(absf(keyboard.get_panel_rect().get_center().x - root.size.x / 2.0) < 1, "keyboard floats at the bottom center")
 	await press(JOY_BUTTON_LEFT_SHOULDER)
 	await press(JOY_BUTTON_X)
 	keyboard._insert("o")

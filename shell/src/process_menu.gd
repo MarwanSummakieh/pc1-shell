@@ -83,23 +83,8 @@ func _ready() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
 
-	var place := MarginContainer.new()
-	place.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	place.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	place.add_theme_constant_override("margin_left", TvTheme.SAFE_MARGIN_X)
-	place.add_theme_constant_override("margin_top", TvTheme.SAFE_MARGIN_Y + 90)
-	add_child(place)
-
-	var column := VBoxContainer.new()
-	column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	place.add_child(column)
-
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", TvTheme.card_idle_box())
-	_panel.custom_minimum_size = Vector2(720, 0)
-	column.add_child(_panel)
+	_panel = preload("res://src/edge_panel.gd").new()
+	add_child(_panel)
 
 	var pad := MarginContainer.new()
 	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -132,7 +117,7 @@ func _ready() -> void:
 	hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
 	hints.add_child(TvTheme.hint("A", "Start or stop"))
 	hints.add_child(TvTheme.hint("B", "Close"))
-	column.add_child(hints)
+	_list.add_child(hints)
 
 	# Live: the whole point of the menu is watching something change, so it has
 	# to redraw when the seam says it did rather than when it is reopened.

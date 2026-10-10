@@ -1,4 +1,5 @@
 #include "mowser.h"
+#include "mowser_extensions.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +16,8 @@ bool g_started = false;
 bool g_attempted = false;
 std::string g_failure;
 uint64_t g_last_pumped_frame = 0;
+std::vector<std::string> g_extension_paths;
+std::string g_extension_root;
 
 bool exists(const std::string &path) {
     struct stat st {};
@@ -53,6 +56,10 @@ public:
         return this;
     }
 
+    CefRefPtr<CefClient> GetDefaultClient() override {
+        return extension_default_client();
+    }
+
     void OnBeforeCommandLineProcessing(const CefString &process_type,
                                        CefRefPtr<CefCommandLine> command_line) override {
         // Browser process only: the helper gets its command line from CEF
@@ -63,11 +70,34 @@ public:
         command_line->AppendSwitch("disable-gpu");
         command_line->AppendSwitch("disable-gpu-compositing");
         command_line->AppendSwitch("disable-dev-shm-usage");
+        if (!g_extension_root.empty()) {
+            // An incompatible unpacked extension must not block CefInitialize
+            // with a Chrome dialog outside the shell's controller UI. Errors
+            // still go to Chromium's log; the manager can disable the package.
+            command_line->AppendSwitch("noerrdialogs");
+            std::string paths;
+            for (const auto &path : g_extension_paths) {
+                if (!paths.empty()) paths += ",";
+                paths += path;
+            }
+            // Chrome can remember unpacked extensions in its profile. Restrict
+            // loading to the current enabled list, including an empty list, so
+            // disabling/removing a package also survives a process restart.
+            if (paths.empty()) {
+                command_line->AppendSwitch("disable-extensions");
+            } else {
+                command_line->AppendSwitchWithValue("disable-extensions-except", paths);
+                command_line->AppendSwitchWithValue("load-extension", paths);
+            }
+        }
         // CEF 151's reading-mode observer assumes every WebContents has a Chrome
         // tab and segfaults on SPA navigation in an off-screen/Alloy browser.
         // Our symbolicated bench crashes match CEF issue 4234 exactly.
         // https://github.com/chromiumembedded/cef/issues/4234
-        command_line->AppendSwitchWithValue("disable-features", "ImmersiveReadAnything");
+        // Chrome's actor overlay likewise assumes every Views WebContents has
+        // a TabInterface. CEF's custom Chrome BrowserView has none; the native
+        // extension panel crashes in OnWebContentsAttached with this enabled.
+        command_line->AppendSwitchWithValue("disable-features", "ImmersiveReadAnything,GlicActorUi");
         command_line->AppendSwitchWithValue("autoplay-policy",
                                             "document-user-activation-required");
     }
@@ -90,6 +120,16 @@ std::string install_root() {
 }
 
 bool Runtime::running() { return g_started; }
+
+bool Runtime::set_extension_paths(const std::vector<std::string> &paths,
+                                const std::string &root) {
+    if (g_attempted) return false;
+    g_extension_paths = paths;
+    g_extension_root = root;
+    return true;
+}
+
+const std::vector<std::string> &Runtime::extension_paths() { return g_extension_paths; }
 
 const std::string &Runtime::failure() { return g_failure; }
 
@@ -218,6 +258,13 @@ void Runtime::pump(uint64_t frame_token) {
 void Runtime::shutdown() {
     if (!g_started) {
         return;
+    }
+    extension_window_command("close");
+    // Chrome closes its window asynchronously. Keep pumping until the native
+    // browser releases its WebContents before CefShutdown tears down the profile.
+    for (int i = 0; i < 500 && extension_window_open(); ++i) {
+        CefDoMessageLoopWork();
+        ::usleep(10000);
     }
     g_started = false;
     // Let anything mid-teardown finish before the framework goes away.

@@ -86,6 +86,8 @@ const SCROLL_INTERVAL := 0.1
 
 ## "keys" or "pointer"; set by Launcher before the node enters the tree.
 var mode := "keys"
+## Optional screen-space bounds for native panels, including their toolbar.
+var pointer_bounds := Rect2i()
 
 var paused := false
 var _await_neutral := true
@@ -204,7 +206,13 @@ func _process(delta: float) -> void:
 		return
 	_pointer_acc -= Vector2(step)
 	# `--` so a leftward move's negative number is not read as an option.
-	_run(["mousemove_relative", "--", str(step.x), str(step.y)])
+	if pointer_bounds.has_area():
+		var target := DisplayServer.mouse_get_position() + step
+		target.x = clampi(target.x, pointer_bounds.position.x, pointer_bounds.end.x - 1)
+		target.y = clampi(target.y, pointer_bounds.position.y, pointer_bounds.end.y - 1)
+		_run(["mousemove", "--", str(target.x), str(target.y)])
+	else:
+		_run(["mousemove_relative", "--", str(step.x), str(step.y)])
 
 
 ## Releasing the pause mid-hold must not resurrect a repeat armed before the
@@ -222,7 +230,7 @@ func set_paused(value: bool) -> void:
 
 func _controls_neutral() -> bool:
 	for index in 15:
-		if index not in [JOY_BUTTON_BACK, JOY_BUTTON_GUIDE] and PlayerOne.button(index):
+		if index != JOY_BUTTON_GUIDE and PlayerOne.button(index):
 			return false
 	for index in 6:
 		if absf(PlayerOne.axis(index)) > 0.2:

@@ -71,13 +71,13 @@ LIBS = -L$(CEF_ROOT)/Release -lcef $(CEF_WRAPPER) $(GODOT_CPP_LIB)
 # is not the one to enforce it.
 LDFLAGS_SHARED = -Wl,--allow-shlib-undefined
 
-EXT_SOURCES = src/mowser_runtime.cpp src/mowser_client.cpp src/mowser_downloads.cpp src/mowser_view.cpp \
+EXT_SOURCES = src/mowser_runtime.cpp src/mowser_client.cpp src/mowser_downloads.cpp src/mowser_extensions.cpp src/mowser_view.cpp \
               src/register_types.cpp
 
 .PHONY: all clean
 all: $(OUT)/libmowser.so $(OUT)/mowser-helper
 
-$(OUT)/libmowser.so: $(EXT_SOURCES) src/mowser.h src/mowser_client.h src/mowser_view.h
+$(OUT)/libmowser.so: $(EXT_SOURCES) src/mowser.h src/mowser_client.h src/mowser_view.h src/mowser_extensions.h
 	@mkdir -p $(OUT)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -shared -o $@ $(EXT_SOURCES) $(LIBS) \
 	    $(LDFLAGS_SHARED) -Wl,-rpath,'$(MOWSER_INSTALL_DIR):$$ORIGIN'

@@ -1,42 +1,19 @@
 extends Control
 
-## THE BROWSER. Not a browser the shell launches -- a browser the shell IS.
-##
-## Everything on this screen except the page itself is drawn here, in this
-## project's theme, by this project's code: the cursor, the status line, the
-## hint row, the error sentence. The page is a MowserView, which is Chromium's
-## engine rendering off-screen into a texture (see mowser/src/mowser.h). That
-## division is the whole point of the owner's ask -- "my own custom made
-## chromium that is only the engine inside my launcher" -- and it is why there
-## is no address bar here unless this file draws one, no tab strip unless this
-## file draws one, and no settings page at all.
-##
-## WHAT REPLACED WHAT. Zen was a browser with a UI nobody could drive with a
-## pad. The Chromium flatpak that replaced it for a day was the same problem
-## with the UI hidden rather than absent -- kiosk mode is a flag on somebody
-## else's application, one changed default away from a window this machine
-## cannot dismiss. This is the third and last answer: the engine is a library,
-## and the browser is ours.
-##
-## THE PAD DRIVES THE PAGE BY METHOD CALL. pad_keys.gd exists because the shell
-## could not reach inside a foreign X client, so it spawns an xdotool process
-## per event and aims it at whatever gamescope focused. None of that applies to
-## a page inside this process: the stick moves a cursor this screen owns, and A
-## is one call into the engine at a coordinate in this control's own space. No
-## processes, no injection, no guessing which window has focus.
-##
-## NAVIGATION, and it is the settings list's argument adapted to a surface that
-## has no rows: there is nothing focusable on this screen at all. The page is
-## not a Control tree the engine's focus can walk, so B is not "up one level" --
-## it is the page's own history, and only when the history is empty does it
-## close the screen. That is the one place this shell lets a button mean two
-## things, and it is what a person expects from a back button in a browser.
+## The shell owns the browser window, start page, tabs, cursor and keyboard.
+## Mowser renders only the web content. L3 switches between native controls and
+## the page pointer; Circle leaves controls before navigating page history.
 
 signal closed()
 
 const TvTheme = preload("res://src/tv_theme.gd")
 const Keyboard = preload("res://src/keyboard.gd")
 const ListMenu = preload("res://src/list_menu.gd")
+const BrowserChrome = preload("res://src/browser_chrome.gd")
+const ExtensionToolbar = preload("res://src/browser_extension_toolbar.gd")
+const PadKeys = preload("res://src/pad_keys.gd")
+const BrowserExtensionMenu = preload("res://src/browser_extension_menu.gd")
+const BrowserExtensions = preload("res://src/browser_extensions.gd")
 
 ## Cursor speed and response, lifted verbatim from pad_keys.gd's pointer
 ## dialect -- the same stick doing the same job should feel identical whether
@@ -83,7 +60,7 @@ var _address: Label = null
 var _last_error := ""
 var _tabs: Array[Control] = []
 var _library: Dictionary = {"bookmarks": [], "history": []}
-const LIBRARY_PATH := "user://browser-library.json"
+var LIBRARY_PATH := "user://browser-library.json"
 const MAX_TABS := 8
 var _picker: Control = null
 var _picker_view: Control = null
@@ -91,6 +68,18 @@ var _dialog_view: Control = null
 var _launch_suspended := false
 var return_label := "Close browser"
 var _page_popup_open := false
+var _chrome: BrowserChrome
+var _controls_active := false
+var _page_bounds := Rect2()
+var _keyboard_rect := Rect2()
+var _address_url := ""
+var _focus_before_modal: Control = null
+var backdrop: Texture2D
+var _extension_toolbar: Window
+var _extension_pad: Node
+var _extension_active := false
+var _extension_overlay: ColorRect
+var _extension_panel_handle := 0
 
 var _scroll_dir := 0
 var _scroll_clock := 0.0
@@ -109,16 +98,19 @@ func _ready() -> void:
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(background)
-
-	# THE PAGE GETS THE SCREEN, EDGE TO EDGE, and this is the one surface in the
-	# shell that does not take the TV-safe inset. A web page is somebody else's
-	# layout: insetting it would letterbox every site behind a border while the
-	# page's own margins are already inside that, and a checkout's Pay button
-	# sitting under a black bar is the failure this whole route exists to avoid.
-	# The shell's own furniture below KEEPS the inset, so nothing this file
-	# draws lands in the overscan.
+	if backdrop != null:
+		var art := TextureRect.new()
+		art.texture = backdrop
+		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		art.modulate = Color(1, 1, 1, 0.18)
+		art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(art)
 	_view = _build_view()
 	_tabs.append(_view)
+	LIBRARY_PATH = Profiles.personal_path("browser-library.json", ProjectSettings.globalize_path("user://browser-library.json"))
+	DirAccess.make_dir_recursive_absolute(LIBRARY_PATH.get_base_dir())
 	if FileAccess.file_exists(LIBRARY_PATH):
 		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(LIBRARY_PATH))
 		if saved is Dictionary:
@@ -126,15 +118,6 @@ func _ready() -> void:
 				if saved.get(key) is Array:
 					_library[key] = saved[key]
 	add_child(_view)
-	# THE PRESET IS RE-APPLIED AFTER PARENTING, and it is not superstition.
-	# Anchors set on a Control that has no parent yet have nothing to resolve
-	# against, so the view can end up in the tree at zero size -- which the
-	# engine never notices (it is told a size through GetViewRect and paints
-	# happily at the fallback) and which draws as nothing at all. Cheap, and it
-	# removes a whole class of "the page is black" from this screen.
-	_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_view.offset_top = 130
-	_view.offset_bottom = -110
 
 	# The cursor and the chrome ride above the page, in their own layer, so the
 	# page cannot paint over them.
@@ -145,6 +128,9 @@ func _ready() -> void:
 	add_child(_cursor_layer)
 
 	add_child(_build_chrome())
+	resized.connect(_layout_browser)
+	_layout_browser.call_deferred()
+	show_start_page()
 
 	set_process(true)
 	set_process_unhandled_input(true)
@@ -166,6 +152,7 @@ func _on_launch_finished(_entry: Dictionary) -> void:
 		set_process_unhandled_input(_keyboard == null and _menu == null and _picker == null)
 
 func suspend_surface() -> void:
+	_close_extension_window()
 	_close_keyboard()
 	_close_menu()
 	_cancel_picker()
@@ -177,7 +164,7 @@ func suspend_surface() -> void:
 	hide()
 	set_process_unhandled_input(false)
 
-func _new_tab(url: String = "https://duckduckgo.com") -> void:
+func _new_tab(url: String = "") -> void:
 	if _tabs.size() >= MAX_TABS:
 		_last_error = "Eight tabs are open. Close a tab to open another."
 		_refresh_status()
@@ -185,29 +172,32 @@ func _new_tab(url: String = "https://duckduckgo.com") -> void:
 	var view := _build_view()
 	_tabs.append(view)
 	add_child(view)
-	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	view.offset_top = 130
-	view.offset_bottom = -110
-	move_child(view, 1)
+	move_child(view, get_children().find(_cursor_layer))
+	view.set_meta("start_page", url.is_empty())
 	_activate_tab(view)
-	open_url(url)
+	if url.is_empty(): show_start_page()
+	else: open_url(url)
 
 func _activate_tab(view: Control) -> void:
 	_close_keyboard()
 	_view.hide()
 	_view = view
-	_view.show()
+	_view.visible = not _is_start_page()
 	_field_context = {}
 	_opening_title = view.get_page_title() if view.has_method("get_page_title") else ""
 	_last_error = ""
 	if view.has_method("get_page_url"): _on_url_changed(view.get_page_url())
 	_refresh_status()
 	_refresh_hints()
+	_layout_browser()
+	_refresh_chrome()
+	if _is_start_page(): _focus_controls(_chrome.search)
+	else: _focus_page()
 	_cursor_layer.queue_redraw()
 
 func _close_tab() -> void:
 	if _tabs.size() <= 1:
-		open_url("https://duckduckgo.com")
+		show_start_page()
 		return
 	var old := _view
 	_tabs.erase(old)
@@ -217,11 +207,13 @@ func _close_tab() -> void:
 			download.state = "cancelled"
 	remove_child(old)
 	old.queue_free()
+	_refresh_chrome()
 
 func _show_list(purpose: String, title: String, items: Array, note: String = "") -> void:
 	_menu_purpose = purpose
 	_scroll_dir = 0
-	_menu = ListMenu.new()
+	_remember_focus()
+	_menu = BrowserExtensionMenu.new() if purpose.begins_with("extension") else ListMenu.new()
 	_menu.title_text = title
 	_menu.items = items
 	_menu.note_text = note
@@ -235,6 +227,7 @@ func _show_list(purpose: String, title: String, items: Array, note: String = "")
 func _dismiss_list() -> void:
 	var purpose := _menu_purpose
 	_close_menu()
+	if purpose == "extension_apps": _show_extension_panel()
 	if purpose == "dialog" and is_instance_valid(_dialog_view):
 		_dialog_view.respond_script_dialog(false, "")
 		_dialog_view = null
@@ -244,6 +237,7 @@ func _open_tabs() -> void:
 	for index in _tabs.size():
 		var view := _tabs[index]
 		var title: String = view.get_page_title() if view.has_method("get_page_title") else "Browser unavailable"
+		if view.get_meta("start_page", false): title = "New tab"
 		if title.is_empty(): title = "Loading"
 		items.append({"id": "tab:%d" % index, "label": ("Current · " if view == _view else "") + title, "icon": "browser"})
 	if _tabs.size() < MAX_TABS:
@@ -264,9 +258,10 @@ func _record_history(view: Control, url: String) -> void:
 	history.push_front({"url": url, "title": view.get_page_title()})
 	if history.size() > 100: history.resize(100)
 	_save_library()
+	if _chrome != null: _chrome.refresh_library(_library)
 
 func _toggle_bookmark() -> void:
-	if not _view.has_method("get_page_url"): return
+	if _is_start_page() or not _view.has_method("get_page_url"): return
 	var url: String = _view.get_page_url()
 	if address_url(url) != url:
 		_last_error = "Only internet pages can be bookmarked."
@@ -277,13 +272,17 @@ func _toggle_bookmark() -> void:
 		if bookmarks[index].get("url") == url:
 			bookmarks.remove_at(index)
 			_save_library()
+			_refresh_chrome()
+			_chrome.refresh_library(_library)
 			return
 	bookmarks.append({"url": url, "title": _view.get_page_title()})
 	_save_library()
+	_refresh_chrome()
+	_chrome.refresh_library(_library)
 
 func _open_library(purpose: String) -> void:
 	var items: Array = []
-	if purpose == "bookmarks":
+	if purpose == "bookmarks" and not _is_start_page() and _view.has_method("get_page_url"):
 		var saved := false
 		for bookmark: Dictionary in _library.bookmarks:
 			if _view.has_method("get_page_url") and bookmark.get("url") == _view.get_page_url(): saved = true
@@ -310,6 +309,7 @@ func _on_file_dialog(request: Dictionary, view: Control) -> void:
 		return
 	_close_keyboard()
 	_close_menu()
+	_remember_focus()
 	# Files owns the controller picker and its filesystem policy.
 	_picker = load("res://src/files_screen.gd").new()
 	_picker_view = view
@@ -330,6 +330,7 @@ func _on_file_dialog(request: Dictionary, view: Control) -> void:
 func _finish_picker() -> void:
 	_cancel_picker()
 	set_process_unhandled_input(true)
+	_restore_focus()
 
 func _on_script_dialog(request: Dictionary, view: Control) -> void:
 	if not visible or _dialog_view != null:
@@ -369,12 +370,7 @@ func _build_view() -> Control:
 	var view: Control = ClassDB.instantiate("MowserView")
 	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	view.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if view.has_method("set_download_directory"):
-		var directory := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
-		if directory.is_empty():
-			directory = OS.get_environment("HOME").path_join("Downloads")
-		view.set_download_directory(directory)
-		view.download_updated.connect(_on_download_updated.bind(view))
+	_configure_downloads(view)
 	view.page_started.connect(func(url: String):
 		if view == _view: _on_page_started(url))
 	view.page_finished.connect(func(url: String, status: int):
@@ -383,7 +379,8 @@ func _build_view() -> Control:
 	view.page_failed.connect(func(url: String, reason: String):
 		if view == _view: _on_page_failed(url, reason))
 	view.title_changed.connect(func(title: String):
-		if view == _view: _on_title_changed(title))
+		if view == _view: _on_title_changed(title)
+		else: _refresh_chrome())
 	view.url_changed.connect(func(url: String):
 		if view == _view: _on_url_changed(url))
 	if view.has_signal("keyboard_context_changed"):
@@ -397,6 +394,18 @@ func _build_view() -> Control:
 		view.popup_requested.connect(func(url: String):
 			if visible: _new_tab(url))
 	return view
+
+
+static func download_directory() -> String:
+	# The player-owned installer worker and FDM accept this exact root. XDG can
+	# return HOME when user-dirs.dirs is absent, or a custom directory outside it.
+	return OS.get_environment("HOME").path_join("Downloads")
+
+
+func _configure_downloads(view: Control) -> void:
+	if view.has_method("set_download_directory"):
+		view.set_download_directory(download_directory())
+		view.download_updated.connect(_on_download_updated.bind(view))
 
 
 ## A page-shaped panel saying why there is no page. Same first-class-render rule
@@ -413,52 +422,123 @@ func _build_engine_missing(reason: String) -> Control:
 	label.add_theme_font_size_override("font_size", TvTheme.SIZE_BODY)
 	label.add_theme_color_override("font_color", TvTheme.TEXT_ALERT)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	label.offset_left = 48
+	label.offset_right = -48
+	label.offset_top = 32
+	label.offset_bottom = -32
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(label)
 	return panel
 
 
-## The shell's own furniture: a status line and the hint row, both inside the
-## TV-safe inset even though the page above them is not.
 func _build_chrome() -> Control:
-	var safe := MarginContainer.new()
-	safe.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	safe.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	safe.add_theme_constant_override("margin_left", TvTheme.SAFE_MARGIN_X)
-	safe.add_theme_constant_override("margin_right", TvTheme.SAFE_MARGIN_X)
-	safe.add_theme_constant_override("margin_top", TvTheme.SAFE_MARGIN_Y)
-	safe.add_theme_constant_override("margin_bottom", TvTheme.SAFE_MARGIN_Y)
+	_chrome = BrowserChrome.new()
+	_chrome.action_requested.connect(_chrome_action)
+	_chrome.url_requested.connect(open_url)
+	# The child builds its controls in _ready, after the caller parents it.
+	_chrome.ready.connect(func():
+		_address = _chrome.address
+		_status = _chrome.status
+		_hints = _chrome.hints
+		_chrome.refresh_library(_library))
+	return _chrome
 
-	var column := VBoxContainer.new()
-	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	safe.add_child(column)
+func _is_start_page() -> bool:
+	return _view != null and _view.get_meta("start_page", false)
 
-	_address = Label.new()
-	_address.add_theme_font_size_override("font_size", TvTheme.SIZE_BODY)
-	_address.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_address.text = "Browser"
-	column.add_child(_address)
+func show_start_page() -> void:
+	_close_keyboard()
+	_view.set_meta("start_page", true)
+	_view.hide()
+	_address_url = ""
+	_address.text = "Website or search"
+	_last_error = ""
+	_refresh_chrome()
+	_refresh_status()
+	_focus_controls(_chrome.search)
 
-	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", TvTheme.SIZE_BODY)
-	_status.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
-	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(_status)
-
-	var spacer := Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(spacer)
-
-	_hints = HBoxContainer.new()
-	_hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
-	column.add_child(_hints)
+func _refresh_chrome() -> void:
+	if _chrome == null or not _chrome.is_node_ready(): return
+	_chrome.refresh_tabs(_tabs, _view)
+	var saved := false
+	for entry: Dictionary in _library.bookmarks:
+		if entry.get("url") == _address_url: saved = true
+	var forward: bool = not _is_start_page() and _view.has_method("can_go_forward") and _view.can_go_forward()
+	var loading: bool = not _is_start_page() and _view.has_method("is_loading") and _view.is_loading()
+	_chrome.refresh_navigation(_can_go_back(), forward, loading, saved, _is_start_page())
+	_cursor_layer.visible = not _controls_active and not _is_start_page() and _keyboard == null
 	_refresh_hints()
 
-	return safe
+func _chrome_action(action: String) -> void:
+	_menu_purpose = "options"
+	match action:
+		"": return
+		"controls":
+			_controls_active = true
+			_scroll_dir = 0
+			_cursor_layer.hide()
+			_refresh_hints()
+		"new": _new_tab()
+		"page": _focus_page()
+		"save": _toggle_bookmark()
+		"options": _open_menu()
+		"reload":
+			if _view.has_method("is_loading") and _view.is_loading():
+				_menu_chosen("stop")
+			else: _menu_chosen("reload")
+		_:
+			_menu_purpose = "options"
+			_menu_chosen(action)
+
+func _focus_controls(target: Control = null) -> void:
+	_controls_active = true
+	_scroll_dir = 0
+	_stick_scroll_remainder = Vector2.ZERO
+	if _click_held: _click(false)
+	if target == null: target = _chrome.address_button
+	target.grab_focus()
+	_cursor_layer.hide()
+	_refresh_hints()
+
+func _focus_page() -> void:
+	if _is_start_page():
+		_focus_controls(_chrome.search)
+		return
+	_controls_active = false
+	var owner := get_viewport().gui_get_focus_owner()
+	if owner != null: owner.release_focus()
+	_cursor_layer.show()
+	_refresh_hints()
+
+func _remember_focus() -> void:
+	if not is_inside_tree(): return
+	_focus_before_modal = get_viewport().gui_get_focus_owner()
+	if _focus_before_modal != null: _focus_before_modal.release_focus()
+
+func _restore_focus() -> void:
+	if not is_inside_tree() or not visible or _keyboard != null or _menu != null or _picker != null: return
+	if _controls_active:
+		_focus_controls(_focus_before_modal if is_instance_valid(_focus_before_modal) and _focus_before_modal.is_visible_in_tree() else null)
+	else: _focus_page()
+	_focus_before_modal = null
+
+func resume_surface() -> void:
+	show()
+	set_process_unhandled_input(true)
+	_restore_focus()
+
+func _layout_browser() -> void:
+	if _chrome == null or not _chrome.is_node_ready(): return
+	_chrome._layout()
+	_page_bounds = _chrome.page_rect()
+	for view in _tabs:
+		view.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+		view.position = _page_bounds.position
+		view.size = _page_bounds.size
+	_cursor_layer.queue_redraw()
 
 
 ## THE HINT ROW SAYS WHAT B DOES RIGHT NOW, and it changes, because B does two
@@ -466,21 +546,12 @@ func _build_chrome() -> Control:
 ## there is not. Advertising one word for both would make the button a surprise
 ## exactly once per visit -- which is the visit where somebody loses a checkout.
 func _refresh_hints() -> void:
-	if _hints == null:
-		return
-	for child in _hints.get_children():
-		_hints.remove_child(child)
-		child.queue_free()
-	_hints.add_child(TvTheme.hint("A", "Click"))
-	_hints.add_child(TvTheme.hint("Y", "Type"))
-	_hints.add_child(TvTheme.hint("X", "Address"))
-	_hints.add_child(TvTheme.hint("Menu", "Options"))
-	_hints.add_child(TvTheme.hint("L1/R1/R stick", "Scroll"))
-	_hints.add_child(TvTheme.hint("B", "Dismiss" if _is_page_popup_open() else ("Back" if _can_go_back() else "Close")))
+	if _hints != null:
+		_chrome.refresh_hints(_controls_active, _is_page_popup_open(), _can_go_back(), _is_start_page())
 
 
 func _can_go_back() -> bool:
-	return _view != null and _view.has_method("can_go_back") and _view.can_go_back()
+	return _view != null and not _is_start_page() and _view.has_method("can_go_back") and _view.can_go_back()
 
 func _is_page_popup_open() -> bool:
 	return _view != null and _view.has_method("is_popup_open") and _view.is_popup_open()
@@ -493,7 +564,6 @@ func _is_page_popup_open() -> bool:
 func open_url(url: String, title: String = "") -> void:
 	_opening_title = title
 	_last_error = ""
-	_on_url_changed(url)
 	# AN EMPTY URL IS A CALLER BUG AND MUST SAY SO. Handed one, the engine
 	# stays on about:blank and renders a blank page -- indistinguishable from a
 	# page that failed to load, which is exactly how a broken file_url() hid
@@ -504,6 +574,12 @@ func open_url(url: String, title: String = "") -> void:
 			_status.text = "There is nothing to open here"
 			_status.add_theme_color_override("font_color", TvTheme.TEXT_ALERT)
 		return
+	_view.set_meta("start_page", false)
+	_view.show()
+	_on_url_changed(url)
+	_layout_browser()
+	_refresh_chrome()
+	_focus_page()
 	if _view != null and _view.has_method("load_url"):
 		_view.load_url(url)
 	_refresh_status()
@@ -517,13 +593,12 @@ func open_url(url: String, title: String = "") -> void:
 func _refresh_status() -> void:
 	if _status == null:
 		return
-	if _view == null or not _view.has_method("is_loading"):
-		_status.text = ""
-		return
+	_status.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
 	if not _last_error.is_empty():
 		_status.text = _last_error
+		_status.add_theme_color_override("font_color", TvTheme.TEXT_ALERT)
 		return
-	if _view.is_loading():
+	if _view != null and _view.has_method("is_loading") and _view.is_loading() and not _is_start_page():
 		_status.text = "%s -- %s" % [STATUS_LOADING, _opening_title] \
 			if not _opening_title.is_empty() else STATUS_LOADING
 		_status.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
@@ -542,11 +617,14 @@ func _refresh_status() -> void:
 ## at half tilt produces no further events, and a cursor that only moves when
 ## somebody wiggles it is a broken mouse.
 func _process(delta: float) -> void:
+	_sync_extension_window()
+	if _extension_active: return
+	if _chrome != null: _chrome.refresh_status()
 	var popup_open := _is_page_popup_open()
 	if _page_popup_open != popup_open:
 		_page_popup_open = popup_open
 		_refresh_hints()
-	if not visible or _keyboard != null or _menu != null or _picker != null or _view == null or not _view.has_method("move_pointer"):
+	if not visible or _controls_active or _keyboard != null or _menu != null or _picker != null or _view == null or not _view.has_method("move_pointer"):
 		_stick_scroll_remainder = Vector2.ZERO
 		return
 
@@ -608,6 +686,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		_open_menu()
 		return
+	if event is InputEventJoypadButton and event.button_index == JOY_BUTTON_LEFT_STICK and event.pressed:
+		get_viewport().set_input_as_handled()
+		if _controls_active: _focus_page()
+		else: _focus_controls()
+		return
+	if event.is_action_pressed("ui_cancel") and _controls_active:
+		get_viewport().set_input_as_handled()
+		if _is_start_page(): closed.emit()
+		else: _focus_page()
+		return
+	if event is InputEventMouseMotion and not _is_start_page() and _view.get_global_rect().has_point(event.position) and _view.has_method("set_pointer"):
+		if _controls_active: _focus_page()
+		_view.set_pointer(event.position - _view.global_position)
+		_cursor_layer.queue_redraw()
+		return
+	if event is InputEventMouseButton and not _is_start_page() and _view.get_global_rect().has_point(event.position) and _view.has_method("set_pointer"):
+		if _controls_active: _focus_page()
+		get_viewport().set_input_as_handled()
+		_view.set_pointer(event.position - _view.global_position)
+		if event.button_index == MOUSE_BUTTON_LEFT: _click(event.pressed)
+		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			_view.scroll(Vector2(0, 120 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -120))
+		return
+	if _controls_active: return
 
 	if event.is_action_pressed("ui_accept"):
 		get_viewport().set_input_as_handled()
@@ -615,7 +717,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_released("ui_accept"):
 		get_viewport().set_input_as_handled()
-		_click(false)
+		if _click_held: _click(false)
 		return
 
 	if event.is_action_pressed("ui_shell_y"):
@@ -668,14 +770,14 @@ func _click(pressed: bool) -> void:
 		# hint row's B word is re-derived on the release rather than waiting for
 		# a load to report.
 		_refresh_hints()
-		if _field_context.get("editable", false):
+		if not _controls_active and _field_context.get("editable", false):
 			_open_keyboard.call_deferred()
 
 
 ## The cursor, drawn by the shell over the page. See CURSOR_RADIUS for why it is
 ## a ring: this has to be findable over arbitrary content nobody here chose.
 func _draw_cursor() -> void:
-	if _view == null or not _view.has_method("get_pointer"):
+	if _controls_active or _is_start_page() or _view == null or not _view.has_method("get_pointer"):
 		return
 	var at: Vector2 = _view.get_pointer() + _view.position
 	_cursor_layer.draw_circle(at, CURSOR_RADIUS + CURSOR_OUTLINE, Color(0, 0, 0, 0.65))
@@ -690,17 +792,44 @@ var _click_held := false
 var _field_context: Dictionary = {}
 var _page_done_action := ""
 
+func _input(event: InputEvent) -> void:
+	if _extension_active:
+		if event.is_action_pressed("ui_shell_home"):
+			_close_extension_window()
+			get_viewport().set_input_as_handled()
+		return
+	# Leave the page clickable around the floating panel, including when moving
+	# directly from one editor to another. Keyboard buttons retain their own GUI input.
+	if not visible or _keyboard == null or _keyboard_purpose != "page":
+		return
+	if not event is InputEventMouseButton and not event is InputEventMouseMotion:
+		return
+	if _keyboard.get_panel_rect().has_point(event.position):
+		return
+	if _view.get_global_rect().has_point(event.position) and _view.has_method("set_pointer"):
+		_view.set_pointer(event.position - _view.global_position)
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			_click(event.pressed)
+		elif event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			_view.scroll(Vector2(0, 120 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -120))
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.pressed:
+		_close_keyboard()
+
 func _on_keyboard_context(context: Dictionary) -> void:
 	if str(context.get("type", "")).is_empty():
 		context["type"] = "text"
+	var same_field := context == _field_context
 	_field_context = context
+	if same_field and _keyboard != null and _keyboard_purpose == "page":
+		return
 	if _keyboard != null and _keyboard_purpose == "page":
 		_close_keyboard()
-	if context.get("editable", false) and _keyboard == null and _menu == null:
+	if context.get("editable", false) and not _controls_active and _keyboard == null and _menu == null:
 		_open_keyboard.call_deferred()
 
 func _open_keyboard() -> void:
-	if not visible or _click_held or _keyboard != null or _view == null or not _view.has_method("type_text"):
+	if not visible or _click_held or _keyboard != null or _menu != null or _picker != null or _controls_active or _view == null or not _view.has_method("type_text"):
 		return
 	if not _field_context.get("editable", false):
 		_status.text = "Select a text field first, then press Triangle to type."
@@ -733,10 +862,10 @@ func _open_keyboard() -> void:
 	_mount_keyboard()
 
 func _mount_keyboard() -> void:
-	# Reserve space instead of covering the page. Chromium reflows the document,
-	# then scrolls the focused editor into its remaining visible area.
+	# The document keeps its full width beneath the floating keyboard.
 	_hints.hide()
 	_cursor_layer.hide()
+	_remember_focus()
 	add_child(_keyboard)
 	if _keyboard.has_signal("panel_moved"):
 		_keyboard.panel_moved.connect(_keyboard_moved)
@@ -745,20 +874,13 @@ func _mount_keyboard() -> void:
 	_reveal_field_later()
 
 func _keyboard_moved(rect: Rect2) -> void:
-	# Put the page on the opposite side of the movable keyboard. Reflowing
-	# keeps editors visible without retaining page values in shell memory.
-	if rect.get_center().x >= size.x / 2.0:
-		_view.offset_left = 0
-		_view.offset_right = -size.x + rect.position.x - Keyboard.PANEL_GAP
-	else:
-		_view.offset_left = rect.end.x + Keyboard.PANEL_GAP
-		_view.offset_right = 0
+	_keyboard_rect = rect
 	_reveal_field_later()
 
 func _reveal_field_later() -> void:
 	await get_tree().create_timer(0.15).timeout
 	if _keyboard != null and _keyboard_purpose == "page" and _view.has_method("reveal_focused_field"):
-		_view.reveal_focused_field()
+		_view.reveal_focused_field(Rect2(_keyboard_rect.position - _view.global_position, _keyboard_rect.size))
 
 func _on_typed(text: String) -> void:
 	var purpose := _keyboard_purpose
@@ -789,10 +911,10 @@ func _close_keyboard() -> void:
 	_keyboard = null
 	remove_child(keyboard)
 	keyboard.queue_free()
-	_view.offset_right = 0
-	_view.offset_left = 0
+	_keyboard_rect = Rect2()
+	_layout_browser()
 	_hints.show()
-	_cursor_layer.show()
+	_restore_focus()
 	set_process_unhandled_input(true)
 
 
@@ -807,6 +929,7 @@ func _on_page_started(_url: String) -> void:
 	_last_error = ""
 	_refresh_status()
 	_refresh_hints()
+	_refresh_chrome()
 
 
 func _on_page_finished(_url: String, http_status: int) -> void:
@@ -814,6 +937,7 @@ func _on_page_finished(_url: String, http_status: int) -> void:
 		_last_error = "Website returned HTTP %d. Options → Reload to retry." % http_status
 	_refresh_status()
 	_refresh_hints()
+	_refresh_chrome()
 	ShellLog.info("browser page finished with status %d" % http_status)
 
 
@@ -828,6 +952,7 @@ func _on_page_failed(_url: String, reason: String) -> void:
 		_status.add_theme_color_override("font_color", TvTheme.TEXT_ALERT)
 	_refresh_hints()
 	ShellLog.warn("browser page failed: %s" % reason)
+	_refresh_chrome()
 
 
 func _on_title_changed(title: String) -> void:
@@ -835,6 +960,7 @@ func _on_title_changed(title: String) -> void:
 	# name but falls back to the page's own once it has one.
 	if _opening_title.is_empty():
 		_opening_title = title
+	_refresh_chrome()
 
 
 static func address_url(text: String) -> String:
@@ -854,8 +980,10 @@ static func address_url(text: String) -> String:
 
 
 func _on_url_changed(url: String) -> void:
+	_address_url = url
 	if _address != null:
-		_address.text = "%d/%d · %s" % [_tabs.find(_view) + 1, _tabs.size(), url]
+		_address.text = "Website or search" if _is_start_page() else url
+	_refresh_chrome()
 
 
 func _open_address() -> void:
@@ -867,6 +995,7 @@ func _open_address() -> void:
 	_keyboard.title_text = "Website or search"
 	_keyboard.masked = false
 	_keyboard.input_context = "url"
+	_keyboard.initial_text = "" if _is_start_page() else _address_url
 	_keyboard.done_label = "Go"
 	_keyboard.submitted.connect(_on_typed)
 	_keyboard.cancelled.connect(_close_keyboard)
@@ -879,6 +1008,7 @@ func _open_menu() -> void:
 	if _menu != null:
 		return
 	_scroll_dir = 0
+	_remember_focus()
 	_menu = ListMenu.new()
 	_menu.title_text = "Browser"
 	_menu.items = [
@@ -887,6 +1017,7 @@ func _open_menu() -> void:
 		{"id": "bookmarks", "label": "Bookmarks", "icon": "browser"},
 		{"id": "history", "label": "History", "icon": "browser"},
 		{"id": "downloads", "label": "Downloads", "icon": "folder"},
+		{"id": "extensions", "label": "Extensions", "icon": "puzzle"},
 		{"id": "enter", "label": "Press Enter", "icon": "keyboard"},
 		{"id": "backspace", "label": "Backspace", "icon": "keyboard"},
 		{"id": "back", "label": "Back", "icon": "arrow-left"},
@@ -909,17 +1040,14 @@ func _close_menu() -> void:
 		_menu.queue_free()
 		_menu = null
 	set_process_unhandled_input(visible and _keyboard == null and _picker == null)
+	_restore_focus()
 
 
 func _menu_chosen(id: String) -> void:
 	var purpose := _menu_purpose
 	_close_menu()
-	if purpose == "downloads":
-		if id.begins_with("cancel:"):
-			var download: Dictionary = _downloads.get(id.trim_prefix("cancel:").to_int(), {})
-			if is_instance_valid(download.get("view")):
-				download.view.cancel_download(download.id)
-		elif id == "files": _open_download_folder()
+	if purpose.begins_with("extension"):
+		_extension_chosen(purpose, id)
 		return
 	if purpose == "tabs":
 		if id == "new": _new_tab()
@@ -931,6 +1059,7 @@ func _menu_chosen(id: String) -> void:
 		elif id == "clear":
 			_library[purpose] = []
 			_save_library()
+			_chrome.refresh_library(_library)
 		elif id.begins_with("visit:"):
 			open_url(str(_library[purpose][id.trim_prefix("visit:").to_int()].url))
 		return
@@ -944,6 +1073,7 @@ func _menu_chosen(id: String) -> void:
 		"tabs": _open_tabs()
 		"bookmarks", "history": _open_library(id)
 		"downloads": _open_downloads()
+		"extensions": _open_extensions()
 		"close": closed.emit()
 		"enter", "backspace":
 			if _view != null and _view.has_method("send_editing_key"):
@@ -953,18 +1083,140 @@ func _menu_chosen(id: String) -> void:
 			if _view != null and _view.has_method(method):
 				_last_error = ""
 				_view.call(method)
+				_refresh_chrome()
 
+
+func _open_extensions() -> void:
+	if _menu != null: return
+	_extension_chosen("extensions", "manage")
+
+func _extension_chosen(_purpose: String, id: String) -> void:
+	if _purpose == "extension_apps":
+		for entry: Dictionary in BrowserExtensions.installed_entries():
+			if entry.id == id and _view.has_method("open_extension_page"):
+				_view.open_extension_page(str(entry.url))
+		_show_extension_panel()
+		return
+	if id not in ["store", "manage"]: return
+	_set_extension_panel_rect()
+	if not _view.has_method("open_extensions") or not _view.open_extensions(id == "manage"):
+		_show_list("extension_error", "Extensions unavailable", [{"id": "dismiss", "label": "Close", "icon": "close"}], "Update MarwanOS to install extensions from the Chrome Web Store.")
+		return
+	_sync_extension_window()
+
+func _sync_extension_window() -> void:
+	var active: bool = _view != null and _view.has_method("is_extension_window_open") and _view.is_extension_window_open()
+	if active and is_instance_valid(_extension_pad):
+		var blocked := TextInput.is_open() or _menu != null or _picker != null
+		if _extension_pad.paused != blocked: _extension_pad.set_paused(blocked)
+	if active: _attach_extension_panel()
+	if active == _extension_active: return
+	_extension_active = active
+	_scroll_dir = 0
+	if active:
+		Kiosk.set_native_pointer_visible(true)
+		_close_keyboard()
+		_remember_focus()
+		set_process_unhandled_input(false)
+		_cursor_layer.hide()
+		_extension_overlay = ColorRect.new()
+		_extension_overlay.color = Color(BrowserChrome.WINDOW, 0.5)
+		_extension_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_extension_overlay.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton and event.pressed: _close_extension_window())
+		add_child(_extension_overlay)
+		if DisplayServer.get_name() == "X11":
+			_extension_toolbar = ExtensionToolbar.new()
+			_extension_toolbar.visible = false
+			_extension_toolbar.command_requested.connect(_extension_command)
+			add_child(_extension_toolbar)
+			_extension_toolbar.show_toolbar()
+			_extension_pad = PadKeys.new()
+			_extension_pad.mode = "pointer"
+			_extension_pad.pointer_bounds = ExtensionToolbar.panel_rect(Rect2i(DisplayServer.screen_get_position(), DisplayServer.screen_get_size()))
+			add_child(_extension_pad)
+	else:
+		Kiosk.set_native_pointer_visible(false)
+		if TextInput.is_open(): TextInput.close()
+		if is_instance_valid(_extension_toolbar): _extension_toolbar.queue_free()
+		if is_instance_valid(_extension_pad): _extension_pad.queue_free()
+		_extension_toolbar = null
+		_extension_pad = null
+		if is_instance_valid(_extension_overlay): _extension_overlay.queue_free()
+		_extension_overlay = null
+		_extension_panel_handle = 0
+		DisplayServer.window_move_to_foreground()
+		if _view.has_method("get_page_url"):
+			var url: String = _view.get_page_url()
+			if url.is_empty() or url == "about:blank": show_start_page()
+			else: _on_url_changed(url)
+		_refresh_status()
+		set_process_unhandled_input(visible and _menu == null and _picker == null)
+		_restore_focus()
+
+func _extension_command(command: String) -> void:
+	if command == "installed":
+		if is_instance_valid(_extension_pad): _extension_pad.set_paused(true)
+		_view.extension_command("hide")
+		if is_instance_valid(_extension_toolbar): _extension_toolbar.hide()
+		var items := BrowserExtensions.installed_entries()
+		_show_list("extension_apps", "Open extension", items if not items.is_empty() else [{"id": "dismiss", "label": "Close"}], "" if not items.is_empty() else "No enabled extensions with a setup page. Install or enable an extension in Manage.")
+		DisplayServer.window_move_to_foreground()
+		return
+	if command != "type":
+		_view.extension_command(command)
+		return
+	if not _view.has_method("extension_type_text"): return
+	if is_instance_valid(_extension_pad): _extension_pad.set_paused(true)
+	TextInput.open_browser_editor(func(edit: Dictionary):
+		if not _extension_active: return
+		if edit.kind == "text": _view.extension_type_text(str(edit.text))
+		elif edit.kind == "key": _view.extension_editing_key(str(edit.key)))
+
+func _show_extension_panel() -> void:
+	if not _extension_active: return
+	_view.extension_command("show")
+	if is_instance_valid(_extension_toolbar): _extension_toolbar.show_toolbar()
+	set_process_unhandled_input(false)
+
+func _set_extension_panel_rect() -> void:
+	if _view == null or not _view.has_method("set_extension_panel_rect"): return
+	var panel := ExtensionToolbar.panel_rect(Rect2i(DisplayServer.screen_get_position(), DisplayServer.screen_get_size()))
+	_view.set_extension_panel_rect(Rect2(panel.position + Vector2i(0, ExtensionToolbar.HEIGHT), Vector2i(panel.size.x, maxi(1, panel.size.y - ExtensionToolbar.HEIGHT))))
+
+func _attach_extension_panel() -> void:
+	if not _view.has_method("get_extension_panel_handle"): return
+	var handle: int = _view.get_extension_panel_handle()
+	if handle <= 0 or handle == _extension_panel_handle: return
+	if DisplayServer.get_name() == "X11" and OS.get_environment("MARWANOS_COMPOSITOR") != "x11":
+		var output: Array = []
+		if OS.execute("/usr/bin/timeout", ["1", "xprop", "-id", str(handle), "-f", "GAMESCOPE_EXTERNAL_OVERLAY", "32c", "-set", "GAMESCOPE_EXTERNAL_OVERLAY", "1"], output, true) != 0:
+			_view.extension_command("close")
+			return
+	_extension_panel_handle = handle
+	_set_extension_panel_rect()
+	var panel := ExtensionToolbar.panel_rect(Rect2i(DisplayServer.screen_get_position(), DisplayServer.screen_get_size()))
+	var target := panel.position + Vector2i(panel.size.x / 2, ExtensionToolbar.HEIGHT + 48)
+	OS.create_process("xdotool", ["mousemove", "--", str(target.x), str(target.y)])
+
+func _close_extension_window() -> void:
+	if _view != null and _view.has_method("extension_command"):
+		_view.extension_command("close")
+	_sync_extension_window()
 
 var _downloads: Dictionary = {}
 var _download_summary := ""
 var _menu_purpose := "options"
 
 func _on_download_updated(download: Dictionary, view: Control = null) -> void:
+	Downloads.browser_updated(download, view)
 	download["view"] = view
 	_downloads[download.id] = download
 	var name := str(download.get("name", "download"))
 	match str(download.state):
-		"complete": _download_summary = "Saved to Downloads: " + name
+		"complete":
+			_download_summary = "Saved to Downloads: " + name
+			DownloadInstall.completed(str(download.get("path", "")))
 		"cancelled": _download_summary = "Download cancelled: " + name
 		"failed": _download_summary = name + " — " + str(download.detail)
 		_:
@@ -974,34 +1226,10 @@ func _on_download_updated(download: Dictionary, view: Control = null) -> void:
 	_refresh_status()
 
 func _open_downloads() -> void:
-	if _menu != null:
-		return
-	_menu_purpose = "downloads"
+	if _menu != null or _picker != null: return
 	_scroll_dir = 0
-	_menu = ListMenu.new()
-	_menu.title_text = "Downloads"
-	_menu.note_text = "Files are saved in Downloads. Downloads continue when you return to the library. Closing a tab cancels its unfinished downloads."
-	_menu.items = []
-	_menu.items.append({"id": "files", "label": "Open Downloads in Files", "icon": "folder"})
-	for download: Dictionary in _downloads.values():
-		var active: bool = download.state == "downloading"
-		var label := "Cancel: " if active else ("Saved: " if download.state == "complete" else str(download.state).capitalize() + ": ")
-		_menu.items.append({"id": "cancel:%s" % download.id if active else "files", "label": label + str(download.name), "icon": "folder"})
-	if _downloads.is_empty():
-		_menu.items.append({"id": "empty", "label": "No downloads yet", "icon": "folder"})
-	_menu.chosen.connect(_menu_chosen)
-	var menu := _menu
-	_menu.closed.connect(func():
-		if _menu == menu: _close_menu())
-	add_child(_menu)
-	set_process_unhandled_input(false)
-
-func _open_download_folder() -> void:
-	if _picker != null: return
-	_picker = load("res://src/files_screen.gd").new()
-	var directory := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
-	if directory.is_empty(): directory = OS.get_environment("HOME").path_join("Downloads")
-	_picker.initial_directory = directory
-	_picker.closed.connect(_finish_picker)
+	_remember_focus()
+	_picker = load("res://src/downloads_screen.gd").new()
+	_picker.closed.connect(func(): _finish_picker.call_deferred())
 	add_child(_picker)
 	set_process_unhandled_input(false)

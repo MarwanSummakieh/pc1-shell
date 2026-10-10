@@ -1,6 +1,6 @@
 extends Control
 
-## The power menu: three rows, three verbs, nothing else to learn.
+## Power actions, including display-only rest for controller wake.
 ##
 ## Each row acts IMMEDIATELY on A, which is what every console's power menu
 ## does -- the deliberate act is opening this screen and moving to the row; a
@@ -8,36 +8,35 @@ extends Control
 ## two buttons to reach. The costliest mistake here is a restart, and this
 ## machine boots in well under a minute.
 ##
-## Sleep is offered with Phase 0's caveat carried in the row itself: whether
-## resume survives the NVIDIA driver and gamescope is a bench question, and
-## until a boot answers it the row says "untested" rather than implying a
-## promise nobody has kept yet.
+## Rest switches off the display while the PC and Bluetooth keep running.
 
 signal closed()
+signal rest_requested()
 
 const TvTheme = preload("res://src/tv_theme.gd")
 const ActionRow = preload("res://src/action_row.gd")
 
 var _rows: Array = []
+var _rest_row: ActionRow = null
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	var background := ColorRect.new()
-	background.color = TvTheme.BACKGROUND
+	background.color = Color(TvTheme.BACKGROUND, 0.45)
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(background)
 
+	var panel := preload("res://src/edge_panel.gd").new()
+	add_child(panel)
 	var safe := MarginContainer.new()
-	safe.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	safe.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	safe.add_theme_constant_override("margin_left", TvTheme.SAFE_MARGIN_X)
-	safe.add_theme_constant_override("margin_right", TvTheme.SAFE_MARGIN_X)
-	safe.add_theme_constant_override("margin_top", TvTheme.SAFE_MARGIN_Y)
-	safe.add_theme_constant_override("margin_bottom", TvTheme.SAFE_MARGIN_Y)
-	add_child(safe)
+	for edge in ["left", "right"]:
+		safe.add_theme_constant_override("margin_" + edge, 32)
+	for edge in ["top", "bottom"]:
+		safe.add_theme_constant_override("margin_" + edge, TvTheme.SAFE_MARGIN_Y)
+	panel.add_child(safe)
 
 	var column := VBoxContainer.new()
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -58,7 +57,14 @@ func _ready() -> void:
 
 	_add(list, "Turn off", "", "power", _on_poweroff)
 	_add(list, "Restart", "", "restart", _on_restart)
-	_add(list, "Sleep", "Untested on this hardware", "sleep", _on_suspend)
+	_add(list, "Rest mode", "", "sleep", _on_rest)
+	_rest_row = _rows.back()
+	var rest_hint := Label.new()
+	rest_hint.text = "Press PS to wake from rest."
+	rest_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rest_hint.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
+	rest_hint.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	column.add_child(rest_hint)
 
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -107,12 +113,12 @@ func _on_restart() -> void:
 	Updates.request_restart()
 
 
-func _on_suspend() -> void:
-	ShellLog.info("power menu: sleep")
-	Updates.request_suspend()
-	# Sleep, unlike the other two, comes BACK -- and it should come back to
-	# the rail, not to a stale power menu.
-	closed.emit()
+func _on_rest() -> void:
+	rest_requested.emit()
+
+
+func show_rest_error() -> void:
+	_rest_row.set_value("Display could not turn off")
 
 
 func _unhandled_input(event: InputEvent) -> void:

@@ -111,8 +111,7 @@ func _run() -> void:
 	check(web._menu != null and web._menu_purpose == "tabs", "nested tab menu stays open")
 	web._close_menu()
 	web._open_downloads()
-	web._menu_chosen("files")
-	check(web._picker != null and not web._picker.picker_mode, "Downloads opens the integrated file manager")
+	check(web._picker != null and web._picker.get_script().resource_path == "res://src/downloads_screen.gd", "Browser opens the system Downloads surface")
 	web._cancel_picker()
 	var first: Control = web._view
 	web._new_tab(base + "/second")

@@ -49,7 +49,7 @@ func acknowledge() -> Dictionary:
 func _run() -> void:
 	await process_frame
 	_audio = root.get_node("Audio")
-	_folder = "/tmp/pc1-audio-shell-%d" % OS.get_process_id()
+	_folder = OS.get_user_data_dir().path_join("audio-check-%d" % OS.get_process_id())
 	DirAccess.make_dir_recursive_absolute(_folder)
 	_audio._folder = _folder
 	_state = {"available": true, "error": "", "request_id": "", "default_output": "tv", "default_input": "mic",
@@ -113,12 +113,64 @@ func _run() -> void:
 			audio_row = row
 	audio_row.grab_focus()
 	await press("ui_accept")
-	check(overlay._audio_screen != null and not overlay._menu.visible, "Home menu opens audio controls")
+	check(overlay._volume_popup != null and overlay._menu.visible, "Home menu opens volume above the visible menu")
 	await press("ui_cancel")
 	await process_frame
-	check(overlay._audio_screen == null and overlay._menu.visible, "Audio returns to Home menu")
+	check(overlay._volume_popup == null and overlay._menu.visible, "Back closes only the volume popup")
 	check(root.get_viewport().gui_get_focus_owner() == audio_row, "Home menu restores focus")
 	overlay.queue_free()
+	await process_frame
+	var home: Control = load("res://scenes/shell_root.tscn").instantiate()
+	root.add_child(home)
+	await process_frame
+	home._reveal_bar(false)
+	await process_frame
+	home._audio_button.grab_focus()
+	await press("ui_accept")
+	var popup: Control = home._volume_popup
+	check(popup != null and home.visible and home._details == null, "Home Audio keeps the library visible")
+	await process_frame
+	check(popup._panel.get_global_rect().end.y < home._audio_button.global_position.y, "volume popup sits above its Audio button")
+	check(popup._slider.has_focus() and popup._slider.value == 50, "popup focuses current output volume")
+	await press("ui_right")
+	await create_timer(0.12).timeout
+	check(_audio.pending and popup._slider.value == 55, "controller volume updates without jumping while pending")
+	popup._slider.value = 82
+	await create_timer(0.12).timeout
+	_state.outputs[0].volume = 55
+	request = acknowledge()
+	check(request.target == "tv" and request.value == 55, "popup changes the default output")
+	await process_frame
+	_state.outputs[0].volume = 82
+	request = acknowledge()
+	check(request.value == 82, "drag keeps the latest value while a request is pending")
+	check(popup._slider.value == 82, "acknowledged volume refreshes in place")
+	await press("ui_accept")
+	request = acknowledge()
+	check(request.action == "mute" and request.value == true, "popup can mute output")
+	popup._slider.value = 100
+	await press("ui_right")
+	check(popup._slider.value == 100, "popup caps output at 100 percent")
+	await create_timer(0.12).timeout
+	popup._slider.value = 38
+	await press("ui_cancel")
+	check(home._volume_popup == null and home._audio_button.has_focus() and home._bar_row.visible, "Back restores Audio focus and keeps Home dock open")
+	_state.outputs[0].volume = 100
+	acknowledge()
+	await process_frame
+	_state.outputs[0].volume = 38
+	request = acknowledge()
+	check(request.value == 38, "closing during a drag still applies the latest volume")
+	home._open_audio()
+	await process_frame
+	_state.available = false
+	write_state()
+	check(not home._volume_popup._slider.editable and home._volume_popup._status.visible, "unavailable audio disables slider with feedback")
+	_state.available = true
+	write_state()
+	await press("ui_shell_home")
+	check(home._volume_popup == null and home._bar_row.visible, "PS/Home dismisses volume before the dock")
+	home.queue_free()
 	await process_frame
 	_audio.request("output", "volume", _audio.outputs[0], 40)
 	_audio._deadline = 0

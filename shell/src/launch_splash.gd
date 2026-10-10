@@ -9,9 +9,8 @@ extends Control
 ## machine -- where the desktop Steam client could stay windowless forever --
 ## it read as a crash that never ended. Consoles solve it with a splash: the
 ## app's identity, big, immediately, so the press is acknowledged in the same
-## second it happens. This is that splash, shell-drawn from what the entry
-## already carries (accent, title, icon path) because nothing better exists
-## until the application's own pixels arrive to replace it.
+## second it happens. Cached game background and logo artwork fill that gap;
+## applications without artwork retain their icon and title.
 ##
 ## ONLY THE REAL-PROCESS BRANCH SHOWS IT. The placeholder branch is its own
 ## fullscreen scene with its own text; a splash over it would be two screens
@@ -54,6 +53,10 @@ const ICON_SIZE := TvTheme.CARD_FOCUSED_SIZE
 
 var _status: Label = null
 var _column: VBoxContainer = null
+var _feedback: VBoxContainer = null
+var _artwork: TextureRect = null
+var _logo: TextureRect = null
+var _title: Label = null
 var _dots: Timer = null
 var _dot_count := 0
 var _failed := false
@@ -61,6 +64,8 @@ var _failed := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if Metadata.games.has(str(entry.get("id", ""))):
+		entry = Metadata.enrich(entry)
 
 	var background := ColorRect.new()
 	background.color = TvTheme.BACKGROUND
@@ -77,6 +82,7 @@ func _ready() -> void:
 	wash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	wash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(wash)
+	_build_artwork()
 
 	var safe := MarginContainer.new()
 	safe.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -97,27 +103,41 @@ func _ready() -> void:
 	_column.add_theme_constant_override("separation", TvTheme.SECTION_GAP)
 	centre.add_child(_column)
 
-	_build_icon()
+	var has_logo := _build_logo()
+	if _artwork == null and not has_logo:
+		_build_icon()
 
-	var title := Label.new()
-	title.text = str(entry.get("title", ""))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", TvTheme.SIZE_HERO_TITLE)
-	title.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
-	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_column.add_child(title)
+	_title = Label.new()
+	_title.text = str(entry.get("title", ""))
+	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_title.add_theme_font_size_override("font_size", TvTheme.SIZE_HERO_TITLE)
+	_title.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
+	_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_title.max_lines_visible = 3
+	_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title.visible = not has_logo
+	_column.add_child(_title)
+	_feedback = _column
+	if _artwork != null:
+		# Keep loading feedback at the safe lower edge of the game's splash.
+		_feedback = VBoxContainer.new()
+		_feedback.alignment = BoxContainer.ALIGNMENT_END
+		_feedback.add_theme_constant_override("separation", TvTheme.SECTION_GAP)
+		_feedback.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		safe.add_child(_feedback)
 
 	_status = Label.new()
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status.add_theme_font_size_override("font_size", TvTheme.SIZE_BODY)
 	_status.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# A minimum width wide enough for the longest form, so the label does not
 	# re-centre itself a few pixels every time a dot appears -- text jitter on
 	# a splash reads as instability, the one thing this screen exists to deny.
 	_status.custom_minimum_size = Vector2(360, 0)
-	_column.add_child(_status)
+	_feedback.add_child(_status)
 	_refresh_dots()
 
 	_dots = Timer.new()
@@ -125,8 +145,72 @@ func _ready() -> void:
 	_dots.autostart = true
 	_dots.timeout.connect(_on_dots_tick)
 	add_child(_dots)
+	resized.connect(_layout_identity)
+	_layout_identity()
 
 	ShellLog.info("launch splash up for %s" % str(entry.get("id", "<unknown>")))
+
+
+func _asset(kind: String) -> Image:
+	var metadata: Dictionary = entry.get("metadata", {})
+	var assets: Dictionary = metadata.get("assets", {})
+	var path := str(assets.get(kind, {}).get("path", entry.get(kind, "")))
+	return Icons.load_icon_image(path)
+
+
+func _build_artwork() -> void:
+	var image := _asset("splash")
+	if image == null:
+		image = _asset("background")
+	if image == null:
+		image = _asset("header")
+	if image == null:
+		return
+	_artwork = TextureRect.new()
+	_artwork.texture = ImageTexture.create_from_image(image)
+	_artwork.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_artwork.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_artwork.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_artwork.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_artwork)
+	var shade := ColorRect.new()
+	shade.color = Color(0, 0, 0, 0.22)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(shade)
+	var gradient := Gradient.new()
+	gradient.colors = PackedColorArray([Color(0, 0, 0, 0), Color(0, 0, 0, 0.85)])
+	var scrim_texture := GradientTexture2D.new()
+	scrim_texture.gradient = gradient
+	scrim_texture.fill_from = Vector2(0, 0)
+	scrim_texture.fill_to = Vector2(0, 1)
+	var scrim := TextureRect.new()
+	scrim.texture = scrim_texture
+	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scrim.anchor_top = 0.65
+	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(scrim)
+
+
+func _build_logo() -> bool:
+	var image := _asset("logo")
+	if image == null:
+		return false
+	_logo = TextureRect.new()
+	_logo.texture = ImageTexture.create_from_image(image)
+	_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_logo.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_column.add_child(_logo)
+	return true
+
+
+func _layout_identity() -> void:
+	if _logo != null:
+		_logo.custom_minimum_size = Vector2(minf(640, size.x * 0.5), minf(280, size.y * 0.28))
+	if _title != null:
+		_title.custom_minimum_size.x = minf(800, maxf(0, size.x - TvTheme.SAFE_MARGIN_X * 2))
 
 
 ## The card's own icon, at focused-card size. Same loader as the card (see
@@ -200,15 +284,16 @@ func show_failure() -> void:
 	journal.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	journal.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
 	journal.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	journal.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	journal.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_column.add_child(journal)
+	_feedback.add_child(journal)
 
 	var hints := HBoxContainer.new()
 	hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
 	hints.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	hints.add_child(TvTheme.hint("B", "Close"))
-	_column.add_child(hints)
+	_feedback.add_child(hints)
 
 	ShellLog.warn("launch splash showing failure for %s" % str(entry.get("id", "<unknown>")))
 

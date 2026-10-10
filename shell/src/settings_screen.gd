@@ -42,6 +42,7 @@ const ActionRow = preload("res://src/action_row.gd")
 const WifiScreen = preload("res://src/wifi_screen.gd")
 const UpdateScreen = preload("res://src/update_screen.gd")
 const AudioScreen = preload("res://src/audio_screen.gd")
+const BluetoothPage = preload("res://src/bluetooth_page.gd")
 
 var _rows: Array = []
 var _scroll: ScrollContainer = null
@@ -49,13 +50,15 @@ var _scroll: ScrollContainer = null
 ## ActionRow, and GDScript resolves signal access against the static type --
 ## a SettingsRow-typed variable would fail to parse on `.activated.connect`.
 var _display_row: ActionRow = null
-var _steam_row: ActionRow = null
 var _wifi_row: ActionRow = null
 var _wifi_screen: WifiScreen = null
 var _updates_row: ActionRow = null
 var _update_screen: UpdateScreen = null
 var _audio_row: ActionRow = null
 var _audio_screen: AudioScreen = null
+var _bluetooth_row: ActionRow = null
+var _bluetooth_screen: Control = null
+var _metadata_row: ActionRow = null
 
 
 func _ready() -> void:
@@ -144,36 +147,14 @@ func _ready() -> void:
 	list.add_child(_display_row)
 	_rows.append(_display_row)
 
-	# THE STEAM ROW IS GONE, and its absence is the correction rather than an
-	# omission. It cycled the window profile -- seven names describing what the
-	# compositor should think of Valve's client -- and every one of them was an
-	# answer to a question this machine no longer asks: Steam was removed from
-	# the image on 2026-08-13 and there is no client to arrange.
-	#
-	# A settings row that tunes something the machine does not have is worse than
-	# a missing one. It invites somebody to bisect a flicker across five profiles
-	# that now differ only in flags nothing consumes, and the honest answer --
-	# the shimmer is a scanout artefact on a freshly-trained link, not a Steam
-	# one -- is on the Display row above.
-	#
-	# The profile MECHANISM survives untouched in the session and in
-	# /usr/lib/marwanos/window/profile: it still assembles gamescope's argv, and
-	# the default is no-bg-steam. What is gone is the invitation to change it
-	# from the couch. Bringing the row back is one block here.
-
-	# THE OTHER HALF OF FIRST-RUN SETUP: "if users don't want it then they should
-	# be able to sign in again after the OS is installed". This is that way back.
-	#
-	# It LAUNCHES Steam rather than reopening the setup screen, and the reason is
-	# the peer guard: Setup.open() refuses while Settings is open, exactly as
-	# Files and Power refuse each other, so a row that called it would do nothing
-	# at all. Launching is also the honest verb -- signing in happens in Steam's
-	# own UI either way, and this row's whole job is to get somebody there.
-	_steam_row = ActionRow.new()
-	_steam_row.setup("Steam", "Sign in or switch account -- press A", "steam")
-	_steam_row.activated.connect(_on_steam_row_pressed)
-	list.add_child(_steam_row)
-	_rows.append(_steam_row)
+	# Steam is reached through Stores; Settings contains system controls.
+	var users_row := ActionRow.new()
+	users_row.setup("Users", "%s · %d users" % [Profiles.current().name, Profiles.users.size()], "user")
+	users_row.activated.connect(func():
+		closed.emit()
+		Profiles.open.call_deferred())
+	list.add_child(users_row)
+	_rows.append(users_row)
 
 	_wifi_row = ActionRow.new()
 	_wifi_row.setup("Wi-Fi", _wifi_value())
@@ -186,6 +167,20 @@ func _ready() -> void:
 	_audio_row.activated.connect(_on_audio_row_pressed)
 	list.add_child(_audio_row)
 	_rows.append(_audio_row)
+
+	_bluetooth_row = ActionRow.new()
+	_bluetooth_row.setup("Bluetooth", "Pair and manage controllers — press A")
+	_bluetooth_row.activated.connect(_on_bluetooth_row_pressed)
+	list.add_child(_bluetooth_row)
+	_rows.append(_bluetooth_row)
+
+	_metadata_row = ActionRow.new()
+	_metadata_row.setup("Update metadata", "Refresh artwork and details for all games")
+	_metadata_row.activated.connect(Metadata.refresh_all)
+	list.add_child(_metadata_row)
+	_rows.append(_metadata_row)
+	Metadata.changed.connect(_refresh_metadata_row)
+	_refresh_metadata_row()
 
 	# The second row that acts. Last, because it is the one that can restart
 	# the machine and should not sit under a thumb that was aiming for Wi-Fi.
@@ -263,6 +258,25 @@ func _on_row_focused(row: Control) -> void:
 	_scroll.ensure_control_visible.call_deferred(row)
 
 
+func _refresh_metadata_row() -> void:
+	var progress: Dictionary = Metadata.refresh
+	_metadata_row.disabled = Metadata.refresh_pending or progress.get("status", "") == "loading"
+	var detail := "Refresh artwork and details for all games"
+	if Metadata.refresh_pending:
+		detail = "Waiting for metadata service…"
+	elif progress.get("status", "") == "loading":
+		detail = "Updating %d of %d games…" % [int(progress.get("completed", 0)), int(progress.get("total", 0))]
+	elif progress.get("status", "") == "done":
+		detail = "Updated %d games" % int(progress.get("completed", 0))
+		if int(progress.get("failed", 0)) > 0:
+			detail += " · %d need attention. Retry or choose Metadata in game Options." % int(progress.failed)
+	elif progress.get("status", "") == "error":
+		detail = str(progress.get("error", "Metadata update failed. Try again."))
+	if not Metadata.refresh_error.is_empty():
+		detail = Metadata.refresh_error
+	_metadata_row.set_value(detail)
+
+
 ## The shared one-axis table (TvTheme.wire_column), plus the scroll-follow
 ## connect that is this screen's own. Kept as a named function rather than
 ## inlined at the call site because the focus_entered connect has to happen for
@@ -278,10 +292,7 @@ func _build_hints() -> Control:
 	var hints := HBoxContainer.new()
 	hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
-	# "Select", still, and now it is true of every row rather than most of them:
-	# Wi-Fi and Updates open a page, Display and Steam step to the next value in
-	# place, Terminal launches. Nothing here answers A with a log line saying it
-	# is read-only any more, because nothing here is.
+	# Every row opens a control or performs the action named on the row.
 	hints.add_child(TvTheme.hint("A", "Select"))
 	hints.add_child(TvTheme.hint("B", "Back"))
 	return hints
@@ -360,21 +371,7 @@ func _on_display_row_pressed() -> void:
 	ShellLog.info("display row: cycled to \"%s\"" % want)
 
 
-## Open Steam so somebody can sign in, or sign in as somebody else.
-##
-## THIS SCREEN DOES NOT CLOSE ITSELF. Launcher.launch emits launch_started, and
-## shell_root already hides every open surface on that signal -- closing here as
-## well would be a second path doing the same job, which is how the two ended up
-## disagreeing the last time this shell had one.
-##
-## The entry is Setup.STEAM_ENTRY rather than a literal, so the shell names
-## Steam's command in exactly one place. It is a plain `steam` on PATH now, not
-## a flatpak id -- see ADR 0011.
-func _on_steam_row_pressed() -> void:
-	ShellLog.info("settings: opening Steam to sign in")
-	Launcher.launch(Setup.STEAM_ENTRY)
-
-
+## Reflect display-profile changes reported by the system worker.
 func _on_display_state_changed(_state: String, _profile: String) -> void:
 	if _display_row != null:
 		_display_row.set_value(_display_profile_value())
@@ -437,18 +434,14 @@ func _on_launch_finished(_entry: Dictionary) -> void:
 	# screen's guard said the other way round. A launch cannot be started from
 	# under one today -- the row is unreachable while a child screen holds focus
 	# -- so this is a guard against a future arrangement rather than a live case.
-	if _wifi_screen == null and _update_screen == null and _audio_screen == null:
+	if _wifi_screen == null and _update_screen == null and _audio_screen == null and _bluetooth_screen == null:
 		set_process_unhandled_input(true)
 	# Nothing is focused after a hide, and a settings screen with no focus owner
 	# is a settings screen the pad cannot move -- the rail's _ensure_focus
 	# lesson, in the one place on this screen where focus can be lost without a
 	# button having been pressed.
 	#
-	# The first row, unconditionally. This used to prefer the terminal row when
-	# one existed, because the terminal was the only thing this screen launched
-	# and so the only thing it could be returning FROM. With that row gone the
-	# preference has nothing left to prefer, and the Steam install row is the
-	# one remaining launcher on this screen -- which sits at the top anyway.
+	# Return to the first system control when the page regains focus.
 	if not _rows.is_empty():
 		var first: Control = _rows[0]
 		first.grab_focus()
@@ -501,6 +494,34 @@ func _close_audio_screen() -> void:
 			child.show()
 	set_process_unhandled_input(true)
 	_audio_row.grab_focus()
+
+
+func _on_bluetooth_row_pressed() -> void:
+	if _bluetooth_screen != null:
+		return
+	set_process_unhandled_input(false)
+	for child in get_children():
+		if child is Control:
+			child.hide()
+	_bluetooth_screen = BluetoothPage.new()
+	_bluetooth_screen.closed.connect(func(): _close_bluetooth_screen.call_deferred())
+	add_child(_bluetooth_screen)
+	Bluetooth.request("refresh")
+
+
+func _close_bluetooth_screen() -> void:
+	if _bluetooth_screen == null:
+		return
+	Bluetooth.request("close")
+	var screen := _bluetooth_screen
+	_bluetooth_screen = null
+	remove_child(screen)
+	screen.queue_free()
+	for child in get_children():
+		if child is Control:
+			child.show()
+	set_process_unhandled_input(true)
+	_bluetooth_row.grab_focus()
 
 
 func _close_wifi_screen() -> void:

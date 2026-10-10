@@ -26,21 +26,14 @@ extends Control
 ## _on_item_chosen is the entire change. The menu still ships with only what it
 ## can actually do.
 ##
-## TYPE IS WHY THE MENU EXISTS RATHER THAN TWO BUTTONS. A person can point at
-## a text field in the browser -- a search box, a sign-in form -- with the pad
-## (pad_keys.gd moves a real cursor) and then has no way to put a single
-## character in it, because the appliance has no keyboard and the shell cannot
-## see inside another application. Nothing here
-## can know that a text field just took focus in a foreign X client; there is no
-## protocol for it under gamescope and inventing one would mean an input method
-## the applications would have to opt into. So the trigger is honest and manual:
-## focus the field in the app, press home, choose Type, write, Done. The string
-## goes in through XTEST, which aims at whatever holds focus -- the same
-## mechanism, and the same reasoning, as the pad bridge next door.
+## Accessible native editors open the keyboard automatically through
+## text_input.gd. Type remains the fallback for custom app controls that do not
+## expose their fields to AT-SPI: focus the field, press home, choose Type,
+## write, Done. This draft is then delivered through the existing XTEST bridge.
 ##
 ## WHILE THE KEYBOARD IS UP THIS OVERLAY IS STILL AN OVERLAY. The menu panel
 ## hides and the keyboard takes its place on the same surface, so
-## Kiosk.set_overlay stays on, the scrim stays drawn, the pad bridge stays
+## Kiosk.set_overlay stays on, the scrim hides, the pad bridge stays
 ## paused, and the application stays visible behind the keys with its cursor
 ## still sitting in the field being filled. Swapping in a separate shell screen
 ## would have covered the app -- and the field a person is typing into is the
@@ -58,7 +51,7 @@ signal closed()
 const TvTheme = preload("res://src/tv_theme.gd")
 const AppMenuRow = preload("res://src/app_menu_row.gd")
 const Keyboard = preload("res://src/keyboard.gd")
-const AudioScreen = preload("res://src/audio_screen.gd")
+const VolumePopup = preload("res://src/volume_popup.gd")
 
 ## The menu, in order. Adding an entry here and a branch in _on_item_chosen is
 ## the whole of adding a menu item -- the panel sizes itself and the focus chain
@@ -72,15 +65,10 @@ const AudioScreen = preload("res://src/audio_screen.gd")
 ## happens all through it.
 const MENU_ITEMS := [
 	{"id": "type", "label": "Type", "icon": "keyboard"},
-	{"id": "audio", "label": "Audio", "icon": ""},
+	{"id": "audio", "label": "Audio", "icon": "speaker"},
 	{"id": "minimize", "label": "Minimize", "icon": "home"},
 	{"id": "close", "label": "Close", "icon": "close"},
 ]
-
-## Width of the menu panel. Fixed rather than a fraction of the screen: the
-## entries are short labels and a panel that grew with the display would just
-## put more empty space between an icon and a word.
-const MENU_WIDTH := 720
 
 ## How far the scrim dims the application behind the menu. Enough that a white
 ## storefront cannot wash out the panel's edge, light enough that the
@@ -91,15 +79,16 @@ const SCRIM_ALPHA := 0.55
 var entry: Dictionary = {}
 
 var _rows: Array = []
-## The left-edge panel's container, kept so Type can hide it without taking the
-## scrim -- or the overlay itself -- down with it. Typed as Control rather than
+## The left-edge panel's container, kept so Type can hide it while retaining
+## the overlay surface. Typed as Control rather than
 ## as the concrete container: this was a CenterContainer until the menu moved to
 ## the left edge, and nothing here should have to change again if it moves back.
 var _menu: Control = null
 var _keyboard: Keyboard = null
-var _audio_screen: AudioScreen = null
+var _volume_popup: VolumePopup = null
 var _typing_pid := -1
 var _typing_error: Label = null
+var _scrim: ColorRect
 
 
 func _ready() -> void:
@@ -121,62 +110,24 @@ func _build() -> void:
 	# application no longer framed there is no region the menu is deliberately
 	# keeping clear, so a partial dim would just be an edge with no meaning.
 	var scrim := ColorRect.new()
+	_scrim = scrim
 	scrim.color = Color(TvTheme.BACKGROUND.r, TvTheme.BACKGROUND.g, TvTheme.BACKGROUND.b, SCRIM_ALPHA)
 	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(scrim)
 
-	# ON THE LEFT EDGE, vertically centred -- asked for directly by the owner,
-	# and it replaces a CenterContainer that put this in the middle of the
-	# screen. The reasoning the middle had ("it belongs to the application
-	# underneath rather than to the shell's furniture") is not wrong, but a
-	# pause menu over a running game covers less of what you were looking at
-	# when it hugs an edge, and the left edge is where the focus starts.
-	#
-	# MarginContainer, not an anchored Panel: the margin is TvTheme.SAFE_MARGIN_X,
-	# the same television safe-area gutter every other screen in this shell
-	# uses. Anchoring hard to x=0 would put the panel's edge in the overscan
-	# region of a set that still has one, which is invisible on a monitor at the
-	# desk and clipped on the actual appliance.
-	#
-	# The container fills the screen and the SIZE flags below place the panel
-	# inside it -- SHRINK_BEGIN horizontally is what makes it hug the left
-	# rather than stretch, and SHRINK_CENTER vertically keeps the old vertical
-	# placement. Both are needed: a Container fits its child to the whole rect
-	# unless the child's size flags say otherwise.
-	var side := MarginContainer.new()
-	side.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	side.add_theme_constant_override("margin_left", TvTheme.SAFE_MARGIN_X)
-	side.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(side)
-	_menu = side
-
-	# PanelContainer, NOT Panel, and the Xvfb run is why this comment exists.
-	# Panel is not a Container: it takes its size from custom_minimum_size and
-	# anchors, and computes nothing from its children. With a minimum height of
-	# zero it drew a zero-height background while the title, the rows and the
-	# hints spilled out and rendered over the application with no surface behind
-	# them -- legible only by luck, over whatever the app happened to be showing.
-	# PanelContainer sizes itself to its child and draws the same stylebox, which
-	# is the whole fix; the width stays a minimum so short menus are not narrow.
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", TvTheme.card_idle_box())
-	panel.custom_minimum_size = Vector2(MENU_WIDTH, 0)
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# See the container above: without these the MarginContainer would stretch
-	# this panel across the whole screen and "on the left" would be invisible.
-	panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	side.add_child(panel)
+	var panel := preload("res://src/edge_panel.gd").new()
+	add_child(panel)
+	_menu = panel
 
 	# No full-rect preset here any more: inside a PanelContainer the child is
 	# laid out by the container, and presetting anchors would fight it.
 	var pad := MarginContainer.new()
 	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.add_theme_constant_override("margin_left", TvTheme.STORE_PAGE_PAD)
-	pad.add_theme_constant_override("margin_right", TvTheme.STORE_PAGE_PAD)
-	pad.add_theme_constant_override("margin_top", TvTheme.STORE_PAGE_PAD)
-	pad.add_theme_constant_override("margin_bottom", TvTheme.STORE_PAGE_PAD)
+	pad.add_theme_constant_override("margin_left", 32)
+	pad.add_theme_constant_override("margin_right", 32)
+	pad.add_theme_constant_override("margin_top", 32)
+	pad.add_theme_constant_override("margin_bottom", 32)
 	panel.add_child(pad)
 
 	var column := VBoxContainer.new()
@@ -189,7 +140,7 @@ func _build() -> void:
 	# from inside the application rather than from a list that already said so.
 	var title := Label.new()
 	title.text = str(entry.get("title", ""))
-	title.add_theme_font_size_override("font_size", TvTheme.SIZE_HERO_TITLE)
+	title.add_theme_font_size_override("font_size", TvTheme.SIZE_WORDMARK)
 	title.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -205,6 +156,9 @@ func _build() -> void:
 		row.setup_item(str(item["id"]), str(item["label"]), str(item["icon"]))
 		row.chosen.connect(_on_item_chosen)
 		items.add_child(row)
+		row._value.hide()
+		row._name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row._name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		_rows.append(row)
 
 	var hints := HBoxContainer.new()
@@ -259,21 +213,22 @@ func _on_item_chosen(id: String) -> void:
 # ---------------------------------------------------------------------------
 
 func _open_audio() -> void:
-	if _audio_screen != null:
+	if _volume_popup != null:
 		return
-	_menu.hide()
-	_audio_screen = AudioScreen.new()
-	_audio_screen.closed.connect(func(): _close_audio.call_deferred())
-	add_child(_audio_screen)
+	_volume_popup = VolumePopup.new()
+	for row in _rows:
+		if row.id == "audio":
+			_volume_popup.anchor_control = row
+	_volume_popup.closed.connect(_close_audio.call_deferred, CONNECT_ONE_SHOT)
+	add_child(_volume_popup)
 
 
 func _close_audio() -> void:
-	if _audio_screen == null:
+	if _volume_popup == null:
 		return
-	var screen := _audio_screen
-	_audio_screen = null
-	remove_child(screen)
-	screen.queue_free()
+	var screen := _volume_popup
+	_volume_popup = null
+	screen.dismiss()
 	_menu.show()
 	for row in _rows:
 		if row.id == "audio":
@@ -303,9 +258,7 @@ func _open_keyboard() -> void:
 	# possibly scrolled out of view) so this entry line is the only readback
 	# they get before the string is committed.
 	_keyboard.masked = false
-	# Transparent, so the application keeps showing through. This overlay's own
-	# scrim is the dimming; a second opaque background would simply be the app
-	# gone. See keyboard.gd's background_alpha.
+	# The app keeps showing at full brightness around the floating keyboard.
 	_keyboard.background_alpha = 0.0
 	_keyboard.submitted.connect(_on_typed)
 	_keyboard.cancelled.connect(_on_typing_cancelled)
@@ -313,6 +266,7 @@ func _open_keyboard() -> void:
 	# immediately fought over by a menu row that is still on screen.
 	_menu.hide()
 	add_child(_keyboard)
+	_scrim.hide()
 
 
 ## What was typed goes into the application underneath.
@@ -406,7 +360,7 @@ func _exit_tree() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _audio_screen != null:
+	if _volume_popup != null:
 		return
 	# THE KEYBOARD OWNS B WHILE IT IS UP. It consumes ui_cancel for its own
 	# cancel signal, and this handler must not treat the same press as a second

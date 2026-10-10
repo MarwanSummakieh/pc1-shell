@@ -73,16 +73,7 @@ func mark_done() -> void:
 
 
 func display_name() -> String:
-	var base := _base_dir()
-	if base.is_empty():
-		return ""
-	var path := base.path_join(NAME_FILE)
-	if not FileAccess.file_exists(path):
-		return ""
-	var handle := FileAccess.open(path, FileAccess.READ)
-	if handle == null:
-		return ""
-	return handle.get_as_text().strip_edges()
+	return str(Profiles.current().name)
 
 
 ## What the row shows when nobody has typed anything.
@@ -95,9 +86,7 @@ func display_name_or_default() -> String:
 ## value in this project is: it is read back into a single-line file and pasted
 ## into UI, and a stray newline turns one fact into two.
 func set_display_name(text: String) -> void:
-	var clean := text.strip_edges().replace("\n", " ").replace("\t", " ")
-	_write(NAME_FILE, clean)
-	ShellLog.info("setup: display name set (%d characters)" % clean.length())
+	Profiles.edit_user(text, str(Profiles.current().get("color", Profiles.COLORS[0])))
 
 
 func open() -> void:
@@ -105,7 +94,7 @@ func open() -> void:
 		return
 	if Launcher.is_busy():
 		return
-	if Settings.is_open() or Power.is_open() or Info.is_open() or Files.is_open() or Browser.is_open() or WindowsInstall.is_open():
+	if Settings.is_open() or Power.is_open() or Info.is_open() or Files.is_open() or Browser.is_open() or WindowsInstall.is_open() or Downloads.is_open():
 		return
 
 	ShellLog.info("setup opened")

@@ -9,6 +9,7 @@ func check(ok: bool, label: String) -> void:
 		failures += 1
 		push_error("FAIL: " + label)
 func _run() -> void:
+	check(OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS) == OS.get_environment("HOME"), "missing XDG Downloads reproduces the graphical OS HOME fallback")
 	web = load("res://src/browser_screen.gd").new()
 	root.add_child(web)
 	var base := "http://127.0.0.1:" + OS.get_environment("PC1_DOWNLOAD_PORT")
@@ -26,7 +27,6 @@ func _run() -> void:
 	web._click(false)
 	await create_timer(3.0).timeout
 	check(web._view.get_page_title() == "Route changed", "soft navigation does not crash the shell")
-	web._view.set_download_directory(OS.get_environment("PC1_DOWNLOAD_DIR"))
 	web._view.load_url(base + "/file")
 	var saved: Dictionary = {}
 	for attempt in 100:
@@ -37,10 +37,12 @@ func _run() -> void:
 		await create_timer(0.1).timeout
 	check(not saved.is_empty(), "download completes through the embedded engine")
 	if not saved.is_empty():
+		check(str(saved.path).get_base_dir() == OS.get_environment("HOME").path_join("Downloads"), "real engine download uses canonical Downloads without a test override")
 		check(FileAccess.get_file_as_string(str(saved.path)) == "PC1 download test\n".repeat(1024), "downloaded file contains the expected bytes")
 	web._open_downloads()
-	check(web._menu != null and not web._menu.items.is_empty(), "Downloads menu opens with download status")
-	web._close_menu()
+	check(web._picker != null and web._picker.get_script().resource_path == "res://src/downloads_screen.gd", "system Downloads opens with browser transfer status")
+	check(not root.get_node("Downloads").browser_tasks.is_empty(), "completed browser download is visible in the shared system queue")
+	web._cancel_picker()
 	print("Browser download checks: %d failure(s)" % failures)
 	root.remove_child(web)
 	web.queue_free()

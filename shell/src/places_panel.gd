@@ -1,8 +1,8 @@
 extends Control
 
 ## Dolphin's Places column: Home and the standard folders inside it, then every
-## drive that is plugged in. Always on screen, on the left, never a mode you
-## have to back out to.
+## drive that is plugged in. Attached on the left, or opened as a drawer when
+## the file listing needs the full width of a compact window.
 ##
 ## THIS REPLACES A VIEW AND THAT IS THE POINT. The single-pane version made
 ## Places a *screen* -- B at a place's root took the whole listing away and
@@ -19,8 +19,9 @@ extends Control
 ## app did not recognize it at all".
 
 const TvTheme = preload("res://src/tv_theme.gd")
-const ActionRow = preload("res://src/action_row.gd")
+const ActionRow = preload("res://src/file_place.gd")
 const FileItem = preload("res://src/file_item.gd")
+const FileTrash = preload("res://src/file_trash.gd")
 
 ## A place was chosen. The screen decides which pane it lands in, because a
 ## column cannot know which side is active.
@@ -76,19 +77,36 @@ const MOUNT_POLL_SECONDS := 2.0
 var _list: VBoxContainer = null
 var _rows: Array = []
 var _known_mounts: Array = []
+var _location := ""
+var _pad: MarginContainer
+var include_trash := true
 
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(TvTheme.FILES_PLACES_WIDTH, 0)
+	custom_minimum_size = Vector2(360, 0)
 	size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	var background := ColorRect.new()
+	background.color = TvTheme.SURFACE
+	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(background)
+	var pad := MarginContainer.new()
+	_pad = pad
+	pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pad.add_theme_constant_override("margin_left", 32)
+	pad.add_theme_constant_override("margin_right", 24)
+	pad.add_theme_constant_override("margin_top", TvTheme.SAFE_MARGIN_Y)
+	pad.add_theme_constant_override("margin_bottom", 24)
+	add_child(pad)
+	resized.connect(_fit_places)
+	_fit_places()
 	var column := VBoxContainer.new()
-	column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_theme_constant_override("separation", TvTheme.SETTINGS_ROW_GAP)
-	add_child(column)
+	column.add_theme_constant_override("separation", 24)
+	pad.add_child(column)
 
 	var heading := Label.new()
 	heading.text = "Places"
@@ -107,7 +125,7 @@ func _ready() -> void:
 	_list = VBoxContainer.new()
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_list.add_theme_constant_override("separation", TvTheme.SETTINGS_ROW_GAP)
+	_list.add_theme_constant_override("separation", 8)
 	scroll.add_child(_list)
 
 	_known_mounts = _mounts()
@@ -118,6 +136,12 @@ func _ready() -> void:
 	timer.autostart = true
 	timer.timeout.connect(_poll_mounts)
 	add_child(timer)
+
+
+func _fit_places() -> void:
+	var viewport := get_viewport_rect().size
+	_pad.add_theme_constant_override("margin_left", maxi(20, roundi(viewport.x * 0.05)))
+	_pad.add_theme_constant_override("margin_top", maxi(20, roundi(viewport.y * 0.05)))
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +186,9 @@ func places() -> Array:
 
 	result.append({"name": "Filesystem", "path": "/", "root": "/",
 		"root_label": "Filesystem", "removable": false, "icon": "folder", "volume": false})
+	if include_trash:
+		result.append({"name": "Trash bin", "path": FileTrash.LOCATION, "root": FileTrash.LOCATION,
+			"root_label": "Trash bin", "removable": false, "icon": "trash", "volume": false})
 
 	for mount_path in _mounts():
 		result.append({"name": mount_path.get_file(), "path": mount_path,
@@ -186,6 +213,8 @@ func _rebuild(focus_path: String = "") -> void:
 		var value := ""
 		if bool(place.get("volume", false)):
 			value = _free_space_text(str(place["path"]))
+		elif str(place["path"]) == FileTrash.LOCATION:
+			value = _trash_count_text()
 		row.setup(str(place["name"]), value, str(place["icon"]))
 		row.set_meta("place", place)
 		row.activated.connect(_on_row_activated.bind(row))
@@ -194,6 +223,7 @@ func _rebuild(focus_path: String = "") -> void:
 		_rows.append(row)
 
 	_wire_focus()
+	set_location(_location)
 
 	if not focus_path.is_empty():
 		for row in _rows:
@@ -227,7 +257,24 @@ func grab_places_focus() -> void:
 	if _rows.is_empty():
 		return
 	var first: Control = _rows[0]
+	for row in _rows:
+		if row.active:
+			first = row
+			break
 	first.grab_focus()
+
+
+func set_location(folder: String) -> void:
+	_location = folder
+	var best := ""
+	for row in _rows:
+		var candidate := str(row.get_meta("place").get("path", ""))
+		if (folder == candidate or folder.begins_with(candidate.trim_suffix("/") + "/")) and candidate.length() > best.length():
+			best = candidate
+	for row in _rows:
+		var active: bool = str(row.get_meta("place").get("path", "")) == best
+		if row.active != active:
+			row.active = active
 
 
 func focused_place() -> Dictionary:
@@ -274,6 +321,7 @@ func _mounts() -> Array:
 
 
 func _poll_mounts() -> void:
+	refresh_trash()
 	var now := _mounts()
 	if now == _known_mounts:
 		return
@@ -299,6 +347,18 @@ func _poll_mounts() -> void:
 	var keep := str(focused_place().get("path", ""))
 	_rebuild(keep)
 	mounts_changed.emit(arrived, departed)
+
+
+func refresh_trash() -> void:
+	for row in _rows:
+		if str(row.get_meta("place").get("path", "")) == FileTrash.LOCATION:
+			row.set_value(_trash_count_text())
+			return
+
+
+func _trash_count_text() -> String:
+	var count := FileTrash.entries().size()
+	return "%d item%s" % [count, "" if count == 1 else "s"]
 
 
 func home_path() -> String:

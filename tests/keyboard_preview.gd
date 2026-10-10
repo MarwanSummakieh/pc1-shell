@@ -33,4 +33,15 @@ func _run() -> void:
 	keyboard.masked = false
 	root.add_child(keyboard)
 	await capture("keyboard-numeric.png")
+	root.remove_child(keyboard)
+	keyboard.queue_free()
+	keyboard = load("res://src/keyboard.gd").new()
+	keyboard.title_text = "Search"
+	keyboard.masked = false
+	keyboard.live_input = true
+	root.add_child(keyboard)
+	await process_frame
+	keyboard._saved_position = Vector2(0.5, 1.0)
+	keyboard._restore_position()
+	await capture("keyboard-floating-live.png")
 	quit()

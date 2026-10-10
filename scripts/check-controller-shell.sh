@@ -17,3 +17,8 @@ if grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script|FAIL:' "$work/import
     exit 1
 fi
 grep -q 'Controller routing shell checks: 0 failure(s)' "$work/check.log"
+"${GODOT_BIN:-godot}" --headless --path "$work/shell" --script "$repo/tests/controller_home.gd" \
+    --audio-driver Dummy > "$work/home.log" 2>&1 || { cat "$work/home.log"; exit 1; }
+cat "$work/home.log"
+! grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script|FAIL:' "$work/home.log"
+grep -q 'Controller Home checks: 0 failure(s)' "$work/home.log"

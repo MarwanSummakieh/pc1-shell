@@ -111,6 +111,8 @@ static func handler_for(file_name: String) -> String:
 ## "installer" means the shell's managed Windows installation surface. It does
 ## not immediately execute the file: the user chooses Run Windows setup there.
 static func plan(file_name: String) -> Dictionary:
+	if file_name.get_extension().to_lower() == "torrent":
+		return {"action": "torrent", "app": "", "detail": "Add download"}
 	if is_image(file_name):
 		return {"action": "image", "app": "", "detail": "View"}
 	if is_windows_installer(file_name):

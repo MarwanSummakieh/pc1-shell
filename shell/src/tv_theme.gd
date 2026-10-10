@@ -11,9 +11,9 @@ const Icons = preload("res://src/icons.gd")
 ## ---------------------------------------------------------------------------
 ## Why these particular numbers
 ##
-## The design surface is a fixed 1920x1080, scaled to the negotiated output by
-## the project's canvas_items stretch. So every constant below is "at 1080p" and
-## stays proportionally correct on a 4K panel.
+## 1920x1080 is the reference scale, not a fixed application frame. canvas_items
+## stretch handles output density; home and attached menus use the available
+## viewport proportions through layout_unit() and sidebar_bounds().
 ##
 ## TV-safe inset: 5% of each edge, which the three platform vendors agree on and
 ## express identically -- Microsoft's 10-foot guidance and Android TV both work
@@ -56,41 +56,21 @@ const SAFE_MARGIN_Y := 54
 # it. Anchoring the selection rather than the strip is what stops the eye having
 # to re-find the cursor after every press.
 
-## Unfocused card. Square, because a square is the only aspect ratio that reads
-## the same whether the art is portrait key art or a square icon, and Phase 1
-## does not get to choose what AppStream hands it.
-const CARD_SIZE := 200
+## Unfocused tile height; width follows the shared 2:3 portrait artwork shape.
+const CARD_SIZE := 168
+const CARD_ASPECT_RATIO := 2.0 / 3.0
+const CARD_SCALE := 1.5
 
-## The selected card. Roughly 1.7x, which is the point where the size difference
-## is legible at three metres rather than merely present -- the same argument as
-## FOCUS_RING_WIDTH being a floor to multiply rather than a value to copy.
-const CARD_FOCUSED_SIZE := 340
-
-const CARD_GAP := 26
-
-## THE ROUNDING, and it was 12 until someone looked at the appliance on a TV and
-## said the buttons were not rounded. They were -- by 12 px on a 1920-wide design
-## surface, which is a chamfer you can measure and cannot see from a sofa. Every
-## focusable rectangle in the shell reads its corner radius from here (cards,
-## settings rows, store tabs, the app menu's panel), so one number is the whole
-## of how round this product looks, and it is deliberately not per-control.
-##
-## 24 rather than a pill. The rows are SETTINGS_ROW_HEIGHT tall, so half their
-## height would be 44 and would turn a list of rows into a stack of lozenges;
-## 24 is unmistakably round at three metres while a row still reads as a row.
-const CARD_CORNER_RADIUS := 24
-
-## Inset from a card's edge to its icon, at CARD_SIZE. An app icon sits inside
-## the card's wash the way a launcher tile's does -- roughly two thirds of the
-## card, so the wash reads as a frame rather than a border. A fixed pixel inset
-## means the icon grows with the card when it takes focus, which is what keeps
-## the selection's size channel working.
-const CARD_ICON_INSET := 34
+## Reference sizes; home uses viewport units, not a fixed tile width.
+const CARD_FOCUSED_SIZE := 208
+const CARD_GAP := 16
+const CARD_CORNER_RADIUS := 8
+const CARD_ICON_INSET := 0
 
 ## How long the rail takes to slide and the card to grow. Long enough to read as
 ## motion, short enough that holding a direction does not feel like wading --
 ## FocusRepeat's hold-repeat interval is the real ceiling on this.
-const RAIL_TWEEN_SECONDS := 0.18
+const RAIL_TWEEN_SECONDS := 0.12
 
 ## The accent wash's strength -- the BASE layer of the home background now,
 ## and the whole background only for an entry that ships no picture (the
@@ -199,7 +179,7 @@ const HERO_ART_SQUARE_TOLERANCE := 0.2
 ## pathological rail rather than a working eviction policy anyone will hit.
 const HERO_ART_CACHE_MAX := 16
 
-const SIZE_HERO_TITLE := 72
+const SIZE_HERO_TITLE := 56
 const SIZE_TOPBAR := 28
 
 # ---------------------------------------------------------------------------
@@ -477,15 +457,15 @@ const TEXT_DISCOUNT := Color(0.529412, 0.780392, 0.423529, 1.0)
 # WCAG's 2-CSS-px thickness figure is calibrated for a monitor at desk distance
 # and is invisible from a sofa. Take the contrast requirement as binding and the
 # thickness as a floor to multiply.
-const FOCUS_RING_WIDTH := 6
+const FOCUS_RING_WIDTH := 3
 
-const SIZE_WORDMARK := 56
-const SIZE_BODY := 30
-const SIZE_SUPPLEMENTAL := 26
+const SIZE_WORDMARK := 44
+const SIZE_BODY := 28
+const SIZE_SUPPLEMENTAL := 24
 
 ## Vertical breathing room between the top bar, the title block, the rail and
 ## the hint row.
-const SECTION_GAP := 28
+const SECTION_GAP := 24
 
 # ---------------------------------------------------------------------------
 # The details panel (DOWN from a card on the home rail)
@@ -537,23 +517,23 @@ const DETAILS_BUTTON_WIDTH := 420
 ## Comfortably above the 64 px interactive floor named in the header, and tall
 ## enough that a name on the left and a value on the right read as one line
 ## from the couch.
-const SETTINGS_ROW_HEIGHT := 88
+const SETTINGS_ROW_HEIGHT := 64
 
-const SETTINGS_ROW_GAP := 14
+const SETTINGS_ROW_GAP := 8
 
 ## Horizontal padding inside a row, between its rounded edge and its text.
-const SETTINGS_ROW_PAD := 28
+const SETTINGS_ROW_PAD := 20
 
 ## (The settings card's accent lived here until the third amendment moved
 ## settings into the top bar as a gear icon; the constant went with the card.)
 
 # RGB 16-235, light-on-dark, no hue carrying meaning on its own.
-const BACKGROUND := Color(0.078431, 0.086275, 0.101961, 1.0)
-const SURFACE := Color(0.149020, 0.164706, 0.196078, 1.0)
-const SURFACE_FOCUS := Color(0.290196, 0.321569, 0.376471, 1.0)
+const BACKGROUND := Color("#11161C")
+const SURFACE := Color("#1B232C")
+const SURFACE_FOCUS := Color("#293541")
 ## One step brighter than SURFACE_FOCUS, for the moment a press is held on a
 ## row that has no scene change to acknowledge it -- see settings_row.gd.
-const SURFACE_PRESSED := Color(0.380392, 0.419608, 0.490196, 1.0)
+const SURFACE_PRESSED := Color("#354352")
 ## A SELECTED item, which is a state the shell had no need for until the file
 ## manager grew multi-select. It is deliberately a HUE change rather than
 ## another step on the same grey ramp: an item can be selected and unfocused,
@@ -571,15 +551,15 @@ const SURFACE_SELECTED_FOCUS := Color(0.250980, 0.396078, 0.549020, 1.0)
 const PANE_ACTIVE_BORDER := Color(0.435294, 0.529412, 0.639216, 1.0)
 const PANE_BORDER_WIDTH := 3
 
-const FOCUS_RING := Color(0.909804, 0.917647, 0.933333, 1.0)
-const TEXT_PRIMARY := Color(0.886275, 0.901961, 0.921569, 1.0)
-const TEXT_SECONDARY := Color(0.588235, 0.619608, 0.666667, 1.0)
+const FOCUS_RING := Color("#D5EAF5")
+const TEXT_PRIMARY := Color("#E4EDF3")
+const TEXT_SECONDARY := Color("#B7C7D2")
 const TEXT_ALERT := Color(0.921569, 0.690196, 0.360784, 1.0)
-const ACCENT_FALLBACK := Color(0.290196, 0.321569, 0.376471, 1.0)
+const ACCENT_FALLBACK := Color("#354352")
 
 ## The hint row's numbers, shared by every screen that draws one.
-const HINT_GAP := 36
-const HINT_GLYPH_GAP := 12
+const HINT_GAP := 24
+const HINT_GLYPH_GAP := 10
 
 
 ## The card's art fill, rounded to the same radius as the box and the ring.
@@ -623,13 +603,7 @@ static func card_focus_box() -> StyleBoxFlat:
 ## paints that box before its children, so the art would swallow it whole. See
 ## tile.gd's _build_contents.
 ##
-## THE RADIUS IS AN ARGUMENT BECAUSE A CARD IS NO LONGER ALWAYS ROUNDED. A game
-## whose own artwork fills its tile edge to edge draws no plate at all, and a
-## rounded ring over square art is the leak card_art_box's comment above
-## describes, arriving from the other side: the art's four corners sit OUTSIDE
-## the ring's curve and poke past it. The default is unchanged, so every caller
-## that has a rounded box under it stays exactly as it was; the chromeless card
-## passes 0 and gets an outline that follows its picture.
+## Artwork and focus outlines share the same rounded silhouette.
 static func card_focus_ring(radius: int = CARD_CORNER_RADIUS) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.draw_center = false
@@ -639,9 +613,36 @@ static func card_focus_ring(radius: int = CARD_CORNER_RADIUS) -> StyleBoxFlat:
 	return box
 
 
-## Top-to-bottom transparent-to-dark, so the title and rail keep their contrast
-## over any hero wash. A GradientTexture2D rather than a shader: it is one
-## resource, it costs nothing on llvmpipe, and it is reviewable as numbers.
+## Local readability ramps keep the selected game's artwork in full colour.
+static func home_art_text_gradient(content_right: float) -> GradientTexture2D:
+	# Protect the actual text region while leaving the rest of the artwork clear.
+	var edge := clampf(content_right, 0.1, 0.95)
+	var gradient := Gradient.new()
+	gradient.offsets = PackedFloat32Array([0.0, edge, minf(edge + 0.24, 1.0)])
+	gradient.colors = PackedColorArray([Color(0, 0, 0, 0.78), Color(0, 0, 0, 0.73), Color(0, 0, 0, 0.08)])
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill_from = Vector2(0, 0)
+	texture.fill_to = Vector2(1, 0)
+	texture.width = 256
+	texture.height = 2
+	return texture
+
+
+static func home_art_header_gradient() -> GradientTexture2D:
+	var gradient := Gradient.new()
+	gradient.offsets = PackedFloat32Array([0.0, 0.35, 1.0])
+	gradient.colors = PackedColorArray([Color(0, 0, 0, 0.85), Color(0, 0, 0, 0.8), Color(0, 0, 0, 0)])
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill_from = Vector2(0, 0)
+	texture.fill_to = Vector2(0, 1)
+	texture.width = 2
+	texture.height = 256
+	return texture
+
+
+## Top-to-bottom transparent-to-dark for surfaces that use a hero wash.
 static func hero_gradient() -> GradientTexture2D:
 	var gradient := Gradient.new()
 	gradient.set_color(0, Color(BACKGROUND.r, BACKGROUND.g, BACKGROUND.b, 0.0))
@@ -691,9 +692,9 @@ static func hero_scrim_color() -> Color:
 static func file_item_box(selected: bool, focused: bool) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	if selected:
-		box.bg_color = SURFACE_SELECTED_FOCUS if focused else SURFACE_SELECTED
+		box.bg_color = SURFACE_PRESSED if focused else SURFACE_FOCUS
 	else:
-		box.bg_color = SURFACE_FOCUS if focused else SURFACE
+		box.bg_color = SURFACE_FOCUS if focused else Color.TRANSPARENT
 	box.set_corner_radius_all(CARD_CORNER_RADIUS)
 	return box
 
@@ -704,9 +705,8 @@ static func file_item_box(selected: bool, focused: bool) -> StyleBoxFlat:
 static func pane_frame(active: bool) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = BACKGROUND
-	box.set_border_width_all(PANE_BORDER_WIDTH)
-	box.border_color = PANE_ACTIVE_BORDER if active else SURFACE
-	box.set_corner_radius_all(CARD_CORNER_RADIUS)
+	box.border_width_top = FOCUS_RING_WIDTH
+	box.border_color = PRIMARY if active else SURFACE
 	return box
 
 
@@ -758,7 +758,7 @@ static func row_pressed_box() -> StyleBoxFlat:
 ## something snug around SIZE_SUPPLEMENTAL's 26, because a circle circumscribes
 ## the glyph where a square inscribed it -- a ring drawn tight to a 26 px mark
 ## clips its corners.
-const HINT_BADGE_SIZE := 46
+const HINT_BADGE_SIZE := 36
 
 
 ## The circle behind a button glyph in the hint row -- see HINT_BADGE_SIZE.
@@ -834,9 +834,36 @@ static func hint(glyph: String, caption_text: String) -> Control:
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_theme_constant_override("separation", HINT_GLYPH_GAP)
+	row.add_child(_hint_badge(glyph))
+
+	var caption := Label.new()
+	caption.text = caption_text
+	caption.add_theme_font_size_override("font_size", SIZE_SUPPLEMENTAL)
+	caption.add_theme_color_override("font_color", TEXT_SECONDARY)
+	caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(caption)
+	return row
+
+
+static func _hint_badge(glyph: String) -> Control:
+	if glyph == "PS":
+		var ps_badge := PanelContainer.new()
+		var box := glyph_box()
+		box.set_content_margin_all(6)
+		ps_badge.add_theme_stylebox_override("panel", box)
+		ps_badge.custom_minimum_size = Vector2(HINT_BADGE_SIZE, HINT_BADGE_SIZE)
+		ps_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var mark := TextureRect.new()
+		mark.texture = load("res://assets/simple-icons/playstation.svg") as Texture2D
+		mark.modulate = TEXT_PRIMARY
+		mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ps_badge.add_child(mark)
+		return ps_badge
 
 	var is_shape := HINT_SHAPES.has(glyph)
-
 	var badge := Label.new()
 	badge.add_theme_font_size_override("font_size", SIZE_SUPPLEMENTAL)
 	badge.add_theme_color_override("font_color", TEXT_PRIMARY)
@@ -858,17 +885,7 @@ static func hint(glyph: String, caption_text: String) -> Control:
 		# Anything else (the OPTIONS button, or a word like "Shift" on the
 		# keyboard's action row) stays text.
 		badge.text = glyph
-	row.add_child(badge)
-
-	var caption := Label.new()
-	caption.text = caption_text
-	caption.add_theme_font_size_override("font_size", SIZE_SUPPLEMENTAL)
-	caption.add_theme_color_override("font_color", TEXT_SECONDARY)
-	caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(caption)
-
-	return row
+	return badge
 
 
 # ---------------------------------------------------------------------------
@@ -932,8 +949,8 @@ static func accent(hex: String) -> Color:
 ## Muted on purpose: these sit UNDER an icon, so the wash is a backdrop rather
 ## than the subject, and it must not fight a colourful icon drawn on top.
 const APP_ACCENTS := [
-	"#3E5C7A", "#4A6B52", "#7A4E63", "#8A6A3E",
-	"#456B70", "#5E5183", "#8A524A", "#4A5E7E",
+	"#3E5467", "#40596B", "#394D60", "#485E70",
+	"#3A5366", "#455A6C", "#3D5162", "#4A5E70",
 ]
 
 
@@ -941,3 +958,18 @@ static func accent_for_id(id: String) -> Color:
 	if id.is_empty():
 		return ACCENT_FALLBACK
 	return accent(APP_ACCENTS[absi(id.hash()) % APP_ACCENTS.size()])
+
+
+# Shared console design system; see docs/design-system.md.
+const PRIMARY := Color("#BCD9EC")
+const TEXT_ON_PRIMARY := Color("#20313E")
+const TEXT_DESTRUCTIVE := Color("#F0AEAE")
+
+static func layout_unit(viewport: Vector2) -> float:
+	return minf(viewport.y, viewport.x * 9.0 / 16.0) / 100.0
+
+static func sidebar_bounds(viewport: Vector2) -> Rect2:
+	var width := minf(viewport.x * 0.30, layout_unit(viewport) * 52.0)
+	if viewport.x < viewport.y * 1.15:
+		width = viewport.x
+	return Rect2(viewport.x - width, 0, width, viewport.y)

@@ -57,6 +57,9 @@ var _selected := false
 var _thumb_rect: TextureRect = null
 var _glyph: Label = null
 var _check: Label = null
+var _name_label: Label
+var _size_label: Label
+var _date_label: Label
 
 
 func setup(new_entry: Dictionary, view_mode: String) -> void:
@@ -102,10 +105,10 @@ func _apply_boxes() -> void:
 	var focused := has_focus()
 	var box := TvTheme.file_item_box(_selected, focused)
 	add_theme_stylebox_override("normal", box)
-	# Hover matches normal for the rail's reason: there is no pointer on this
-	# machine, and a mouse that wandered in should not light an item up.
-	add_theme_stylebox_override("hover", box)
-	add_theme_stylebox_override("pressed", TvTheme.file_item_box(_selected, true))
+	add_theme_stylebox_override("hover", TvTheme.file_item_box(_selected, true))
+	var pressed_box := TvTheme.file_item_box(_selected, true)
+	pressed_box.bg_color = TvTheme.SURFACE_PRESSED
+	add_theme_stylebox_override("pressed", pressed_box)
 	add_theme_stylebox_override("disabled", box)
 
 
@@ -126,7 +129,7 @@ func set_selected(value: bool) -> void:
 	_selected = value
 	_apply_boxes()
 	if _check != null:
-		_check.visible = _selected
+		_check.modulate.a = 1.0 if _selected else 0.0
 
 
 func toggle_selected() -> void:
@@ -158,6 +161,7 @@ func _build_details_row() -> void:
 	row.add_child(_build_mark(TvTheme.FILES_ROW_GLYPH_SIZE))
 
 	var name_label := _label(_display_name(), TvTheme.SIZE_BODY, TvTheme.TEXT_PRIMARY)
+	_name_label = name_label
 	# THE NAME IS THE EXPANDING CHILD, settings_row.gd's lesson: a Label with
 	# overrun trimming reports a 1 px minimum width, so a spacer taking the
 	# slack would lay every name out one pixel wide. The floor is the other
@@ -172,19 +176,17 @@ func _build_details_row() -> void:
 	# absent in a narrow pane; the date goes first, because "how big" is the
 	# question a file manager gets asked and "when" is the one it gets asked
 	# about the folder rather than about the row.
-	if show_size:
-		var size_label := _label(_size_text(), TvTheme.SIZE_SUPPLEMENTAL,
-			TvTheme.TEXT_SECONDARY)
-		size_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		size_label.custom_minimum_size = Vector2(150, 0)
-		row.add_child(size_label)
+	_size_label = _label(_size_text(), TvTheme.SIZE_SUPPLEMENTAL, TvTheme.TEXT_SECONDARY)
+	_size_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_size_label.custom_minimum_size = Vector2(150, 0)
+	_size_label.visible = show_size
+	row.add_child(_size_label)
 
-	if show_date:
-		var date_label := _label(_date_text(), TvTheme.SIZE_SUPPLEMENTAL,
-			TvTheme.TEXT_SECONDARY)
-		date_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		date_label.custom_minimum_size = Vector2(230, 0)
-		row.add_child(date_label)
+	_date_label = _label(_date_text(), TvTheme.SIZE_SUPPLEMENTAL, TvTheme.TEXT_SECONDARY)
+	_date_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_date_label.custom_minimum_size = Vector2(230, 0)
+	_date_label.visible = show_date
+	row.add_child(_date_label)
 
 
 ## Icons: a picture over a name. The mode thumbnails are FOR -- a folder of
@@ -234,7 +236,7 @@ func _build_icon_cell() -> void:
 	# be able to say it is selected.
 	_check = Icons.label("check", 40, TvTheme.FOCUS_RING)
 	_check.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	_check.visible = _selected
+	_check.modulate.a = 1.0 if _selected else 0.0
 	slot.add_child(_check)
 
 	var name_label := _label(_display_name(), TvTheme.SIZE_SUPPLEMENTAL, TvTheme.TEXT_PRIMARY)
@@ -282,8 +284,17 @@ func _build_compact_row() -> void:
 func _build_check() -> Control:
 	_check = Icons.label("check", TvTheme.SIZE_BODY, TvTheme.FOCUS_RING)
 	_check.custom_minimum_size = Vector2(TvTheme.SIZE_BODY + 8, 0)
-	_check.visible = _selected
+	_check.modulate.a = 1.0 if _selected else 0.0
 	return _check
+
+
+## Resize columns in place: a display change must never replace a pressed row.
+func fit_columns(size_column: bool, date_column: bool, floor_width: int) -> void:
+	if not is_instance_valid(_name_label):
+		return
+	_name_label.custom_minimum_size.x = floor_width
+	_size_label.visible = size_column
+	_date_label.visible = date_column
 
 
 func _build_mark(size: int) -> Control:

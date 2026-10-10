@@ -20,21 +20,27 @@ extends Control
 ## things are directly inside instead, which is one read and is usually the
 ## question anyway.
 ##
-## The frame, the scrim and the row rhythm are card_menu's and file_menu's, so
-## this reads as the same family of centred panels rather than as a dialog box
-## that wandered in from a desktop.
+## The panel and scrim follow the OS action menus. Facts form one scrollable
+## column, with controller focus keeping the current fact visible.
 
 signal closed()
 
 const TvTheme = preload("res://src/tv_theme.gd")
 const FileItem = preload("res://src/file_item.gd")
 const FileOpen = preload("res://src/file_open.gd")
+const EdgePanel = preload("res://src/edge_panel.gd")
 
-const PANEL_WIDTH := 900
+## Match the shared action-menu scrim while retaining the originating listing.
+const SCRIM_ALPHA := 0.45
 
-## card_menu's scrim, for card_menu's reason: there is nothing live underneath
-## worth keeping visible -- only the listing the person just came from.
-const SCRIM_ALPHA := 0.82
+class FactRow extends PanelContainer:
+	func _ready() -> void:
+		focus_entered.connect(queue_redraw)
+		focus_exited.connect(queue_redraw)
+
+	func _draw() -> void:
+		if has_focus():
+			draw_style_box(TvTheme.card_focus_ring(), Rect2(Vector2.ZERO, size))
 
 ## {path, name, is_dir, is_link, ...}. Set before add_child.
 var entry: Dictionary = {}
@@ -51,26 +57,16 @@ func _ready() -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(scrim)
 
-	var centre := CenterContainer.new()
-	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(centre)
-
-	# PanelContainer, not Panel, for the reason app_overlay.gd spells out: Panel
-	# computes nothing from its children and would draw a zero-height background
-	# under spilled content.
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", TvTheme.card_idle_box())
-	panel.custom_minimum_size = Vector2(PANEL_WIDTH, 0)
+	var panel := EdgePanel.new()
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	centre.add_child(panel)
+	add_child(panel)
 
 	var pad := MarginContainer.new()
 	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.add_theme_constant_override("margin_left", TvTheme.STORE_PAGE_PAD)
-	pad.add_theme_constant_override("margin_right", TvTheme.STORE_PAGE_PAD)
-	pad.add_theme_constant_override("margin_top", TvTheme.STORE_PAGE_PAD)
-	pad.add_theme_constant_override("margin_bottom", TvTheme.STORE_PAGE_PAD)
+	pad.add_theme_constant_override("margin_left", 32)
+	pad.add_theme_constant_override("margin_right", 32)
+	pad.add_theme_constant_override("margin_top", TvTheme.SAFE_MARGIN_Y)
+	pad.add_theme_constant_override("margin_bottom", TvTheme.SAFE_MARGIN_Y)
 	panel.add_child(pad)
 
 	var column := VBoxContainer.new()
@@ -80,25 +76,35 @@ func _ready() -> void:
 
 	var title := Label.new()
 	title.text = str(entry.get("name", ""))
-	title.add_theme_font_size_override("font_size", TvTheme.SIZE_HERO_TITLE)
+	title.add_theme_font_size_override("font_size", TvTheme.SIZE_WORDMARK)
 	title.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
-	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.max_lines_visible = 3
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(title)
 
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	column.add_child(scroll)
 	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rows.add_theme_constant_override("separation", 10)
-	column.add_child(rows)
-
+	rows.add_theme_constant_override("separation", 24)
+	scroll.add_child(rows)
 	for row in _facts():
 		rows.add_child(_fact_row(str(row[0]), str(row[1])))
+	var facts := rows.get_children()
+	TvTheme.wire_column(facts)
 
 	var hints := HBoxContainer.new()
 	hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
 	hints.add_child(TvTheme.hint("B", "Back"))
 	column.add_child(hints)
+	if not facts.is_empty():
+		facts[0].grab_focus()
 
 	ShellLog.info("files: properties of %s" % str(entry.get("path", "")))
 
@@ -141,17 +147,27 @@ func _facts() -> Array:
 
 
 func _fact_row(label_text: String, value_text: String) -> Control:
-	var row := HBoxContainer.new()
+	var row := FactRow.new()
+	row.focus_mode = Control.FOCUS_ALL
+	row.add_theme_stylebox_override("focus", TvTheme.card_focus_ring())
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_theme_constant_override("separation", TvTheme.HINT_GAP)
+	var spacing := StyleBoxEmpty.new()
+	spacing.content_margin_left = 12
+	spacing.content_margin_right = 12
+	spacing.content_margin_top = 8
+	spacing.content_margin_bottom = 8
+	row.add_theme_stylebox_override("panel", spacing)
+	var content := VBoxContainer.new()
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_theme_constant_override("separation", 4)
+	row.add_child(content)
 
 	var label := Label.new()
 	label.text = label_text
-	label.add_theme_font_size_override("font_size", TvTheme.SIZE_BODY)
+	label.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
 	label.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
-	label.custom_minimum_size = Vector2(240, 0)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(label)
+	content.add_child(label)
 
 	var value := Label.new()
 	value.text = value_text
@@ -160,7 +176,7 @@ func _fact_row(label_text: String, value_text: String) -> Control:
 	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(value)
+	content.add_child(value)
 
 	return row
 

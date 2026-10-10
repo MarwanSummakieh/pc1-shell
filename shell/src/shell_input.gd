@@ -195,44 +195,12 @@ func _ready() -> void:
 		_button(JOY_BUTTON_RIGHT_SHOULDER),
 	], STICK_DEADZONE)
 
-	# THE HOME BUTTON, ON TWO PADS' WORTH OF BUTTONS, because the obvious one is
-	# not always ours to have.
-	#
-	# JOY_BUTTON_GUIDE is the PS button on a DualSense and the Xbox button on an
-	# Xbox pad; hid-playstation reports it as BTN_MODE and SDL maps it to guide.
-	# It is the button a console user already knows means "get me out of this",
-	# and it stays first here for exactly that reason.
-	#
-	# BUT STEAM TAKES IT. In Big Picture, Steam Input binds Guide for its own
-	# menu and reads the device directly -- gamescope has no gamepad handling at
-	# all, so nothing in the compositor can arbitrate. On 2026-08-13 the owner
-	# launched Steam and could not get out of it: Guide went to Steam, Steam's
-	# own Shut Down did nothing (it wants SteamOS's session manager), there is no
-	# console login on this image, and sshd was down. The only exit from an
-	# application was the physical power button.
-	#
-	# So SHARE is a home button too. JOY_BUTTON_BACK is Share on a DualShock 4,
-	# Create on a DualSense and View on an Xbox pad -- BTN_SELECT to the kernel.
-	# Steam does not bind it, which is the whole point: an escape that depends on
-	# the cooperation of the program you are escaping is not an escape.
-	#
-	# ALWAYS BOUND, NOT ONLY WHILE STEAM RUNS, and that is deliberate rather than
-	# lazy. A binding that changes depending on what is running is one nobody can
-	# learn, and the shell would have to know Steam is up -- which is exactly the
-	# kind of state this shell keeps getting wrong. It costs nothing when idle:
-	# shell_root only acts on this action while Launcher.is_busy(), so at the
-	# rail Share does nothing at all.
-	#
-	# The cost is real and worth stating: a game that uses Share for its own
-	# purpose will also open this menu. That is the trade for having a way out
-	# that cannot be taken away.
-	#
-	# KEY_HOME is the desk equivalent, which is also what the Xvfb harness
-	# drives it with.
+	# Guide is the PS/Xbox Home button. Share/Create/View remains available
+	# to games and must not also open the system menu. KEY_HOME is the desk
+	# equivalent used by the shell harness.
 	_define("ui_shell_home", [
 		_key(KEY_HOME),
 		_button(JOY_BUTTON_GUIDE),
-		_button(JOY_BUTTON_BACK),
 	], STICK_DEADZONE)
 
 	_verify()

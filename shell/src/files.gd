@@ -42,7 +42,7 @@ func open() -> void:
 		# The home rail is already hidden behind a launch; stacking a second
 		# restoring surface would restore it twice. Same guard as settings.
 		return
-	if Settings.is_open() or Power.is_open() or Info.is_open() or Browser.is_open() or WindowsInstall.is_open():
+	if Settings.is_open() or Power.is_open() or Info.is_open() or Browser.is_open() or WindowsInstall.is_open() or Downloads.is_open():
 		# The shell surfaces are peers, not layers: whichever is up owns the
 		# screen until it closes. (The others hold the mirror guards.)
 		return

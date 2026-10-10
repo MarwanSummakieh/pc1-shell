@@ -32,3 +32,23 @@ if grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script|FAIL:' "$work/import
     exit 1
 fi
 grep -q 'Tools shell checks: 0 failure(s)' "$work/check.log"
+
+timeout 90 "$godot_bin" --headless --path "$work/shell" --script "$repo/tests/keyboard_input_timing.gd" \
+    --audio-driver Dummy > "$work/keyboard-timing.log" 2>&1 || { cat "$work/keyboard-timing.log"; exit 1; }
+cat "$work/keyboard-timing.log"
+! grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script|FAIL:' "$work/keyboard-timing.log"
+grep -q 'Keyboard input timing checks: 0 failure(s)' "$work/keyboard-timing.log"
+timeout 90 "$godot_bin" --headless --path "$work/shell" --script "$repo/tests/browser_shell.gd" \
+    --audio-driver Dummy > "$work/browser.log" 2>&1 || { cat "$work/browser.log"; exit 1; }
+cat "$work/browser.log"
+! grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script|FAIL:' "$work/browser.log"
+grep -q 'Browser shell checks: 0 failure(s)' "$work/browser.log"
+
+python3 -m unittest discover -s "$repo/tests" -p test_browser_extensions.py
+python3 -m unittest discover -s "$repo/tests" -p test_text_input.py
+export MARWANOS_BROWSER_EXTENSIONS_HELPER="$repo/os/files/usr/lib/marwanos/browser_extensions.py"
+timeout 90 "$godot_bin" --headless --path "$work/shell" --script "$repo/tests/browser_extensions_shell.gd" \
+    --audio-driver Dummy > "$work/extensions.log" 2>&1 || { cat "$work/extensions.log"; exit 1; }
+cat "$work/extensions.log"
+! grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script|FAIL:' "$work/extensions.log"
+grep -q 'Browser extension shell checks: 0 failure(s)' "$work/extensions.log"

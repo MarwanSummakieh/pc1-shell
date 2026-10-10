@@ -45,6 +45,7 @@ signal activated()
 
 var _wifi: Glyphs = null
 var _clock: Label = null
+var _battery: Label = null
 ## The padded content, held because _get_minimum_size answers from it: an
 ## anchored child contributes NOTHING to a Button's own minimum, so without
 ## this the corner is a zero-width control whose wifi fan and clock spill past
@@ -98,6 +99,12 @@ func _ready() -> void:
 	_wifi.visible = false
 	_wifi.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(_wifi)
+	_battery = Label.new()
+	_battery.add_theme_font_size_override("font_size", TvTheme.SIZE_TOPBAR)
+	_battery.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(_battery)
+	Bluetooth.changed.connect(_refresh_battery)
+	_refresh_battery()
 
 	_clock = Label.new()
 	_clock.add_theme_font_size_override("font_size", TvTheme.SIZE_TOPBAR)
@@ -122,6 +129,23 @@ func _refresh_min_size() -> void:
 		return
 	var content := _pad.get_combined_minimum_size()
 	custom_minimum_size = Vector2(content.x, maxf(content.y, TvTheme.SIZE_TOPBAR + 18))
+
+
+func _refresh_battery() -> void:
+	var parts := PackedStringArray()
+	var low := false
+	for device in Bluetooth.snapshot.get("devices", []):
+		var battery: Dictionary = device.get("battery", {})
+		if not battery.get("available", false):
+			continue
+		var slot := int(device.get("player_slot", 0))
+		var prefix := "P%d" % slot if slot > 0 else "Pad"
+		parts.append("%s %d%%%s" % [prefix, int(battery.percent), " +" if battery.get("status") == "Charging" else ""])
+		low = low or (int(battery.percent) <= 20 and battery.get("status") != "Charging")
+	_battery.text = " · ".join(parts)
+	_battery.visible = not parts.is_empty()
+	_battery.add_theme_color_override("font_color", TvTheme.TEXT_ALERT if low else TvTheme.TEXT_SECONDARY)
+	_refresh_min_size()
 
 
 ## The network's answer as a glyph. "unknown" draws nothing -- see the header.

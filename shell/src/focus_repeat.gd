@@ -45,6 +45,9 @@ var _countdown := 0.0
 
 
 func _process(delta: float) -> void:
+	if SteamEmbed.owns_input() and not TextInput.is_open():
+		_direction = Vector2i.ZERO
+		return
 	var direction := _held_direction()
 
 	if direction != _direction:
@@ -112,7 +115,7 @@ func _send(action: String) -> void:
 	# No focus owner means no home rail on screen -- the launch placeholder is up,
 	# or the tree has not finished building. Repeating into that would move focus
 	# behind whatever is covering it.
-	if get_viewport().gui_get_focus_owner() == null:
+	if TextInput.focus_viewport().gui_get_focus_owner() == null:
 		return
 
 	var press := InputEventAction.new()

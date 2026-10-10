@@ -58,7 +58,8 @@ func _run() -> void:
 	screen = load("res://scenes/shell_root.tscn").instantiate()
 	root.add_child(screen)
 	await process_frame
-	await press(JOY_BUTTON_DPAD_RIGHT) # Settings -> Install on an empty rail.
+	for button: Control in screen._bar_buttons:
+		if button.get_meta("destination", "") == "Install": button.grab_focus()
 	await press(JOY_BUTTON_A)
 	check(installs.is_open(), "controller opens installation from home")
 	check(not screen.visible, "home hides behind installation")
@@ -82,6 +83,38 @@ func _run() -> void:
 	check(DirAccess.get_files_at(home.path_join("requests")).size() == 2, "controller can cancel active job")
 	publish("cancelled")
 	await press(JOY_BUTTON_B)
+	DirAccess.make_dir_recursive_absolute(home.path_join("jobs"))
+	var job_path := home.path_join("jobs/local-pending.json")
+	var pending_job := {"id": "local-pending", "source": "/Downloads/Witcher/setup.exe", "status": "select",
+		"choices": [{"id": "drive_c/Games/witcher3.exe", "title": "The Witcher 3 - Remastered", "shortcut": true}]}
+	var job_file := FileAccess.open(job_path, FileAccess.WRITE)
+	job_file.store_string(JSON.stringify(pending_job))
+	job_file.close()
+	installs._poll_local()
+	await process_frame
+	check(screen._cards.is_empty(), "unfinished setup stays out of Home")
+	var downloads := root.get_node("Downloads")
+	downloads.open()
+	await process_frame
+	check(downloads._screen._rows.has("setup:local-pending"), "unfinished setup is available in Downloads")
+	downloads._screen._rows["setup:local-pending"].grab_focus()
+	await press(JOY_BUTTON_A)
+	await press(JOY_BUTTON_A)
+	check(installs.is_open() and not launcher.is_busy(), "Downloads opens program selection without relaunching setup")
+	check(installs._screen.source_path == pending_job["source"], "Downloads selects its own installation")
+	await press(JOY_BUTTON_B)
+	check(downloads.is_open() and not installs.is_open(), "Back from program selection restores Downloads")
+	await press(JOY_BUTTON_B)
+	pending_job["status"] = "failed"
+	job_file = FileAccess.open(job_path, FileAccess.WRITE)
+	job_file.store_string(JSON.stringify(pending_job))
+	job_file.close()
+	installs._poll_local()
+	check(installs.library().size() == 1, "interrupted setup with programs remains visible")
+	DirAccess.remove_absolute(job_path)
+	installs._poll_local()
+	await process_frame
+	check(screen._cards.is_empty(), "removing unfinished setup removes its pending card")
 	var entry := {"id": "managed.example", "recipe_id": "example", "title": "Example",
 		"state": "installed", "exec": ["/bin/sleep", "60"], "icon": "", "subtitle": "Windows app"}
 	publish("done", [entry])
@@ -96,12 +129,14 @@ func _run() -> void:
 	check(launcher._splash._failed, "missing compositor signal offers controller recovery")
 	# Headless Godot has no compositor. Supply the successful window handoff.
 	launcher._app_is_up()
-	await press(JOY_BUTTON_BACK) # Share is the shell's alternate Home binding.
+	await press(JOY_BUTTON_BACK)
+	check(screen._overlay == null and root.get_node("ControllerRouter")._app_input, "Share leaves the running application in control")
+	await press(JOY_BUTTON_GUIDE)
 	check(screen._overlay != null, "controller opens overlay during application")
 	check(not root.get_node("ControllerRouter")._app_input, "overlay neutralizes application controller input")
 	await press(JOY_BUTTON_B)
 	check(screen._overlay == null and launcher.is_busy(), "back resumes application")
-	await press(JOY_BUTTON_BACK)
+	await press(JOY_BUTTON_GUIDE)
 	await press(JOY_BUTTON_DPAD_DOWN) # Type -> Audio.
 	await press(JOY_BUTTON_DPAD_DOWN) # Audio -> Minimize.
 	var running_pid: int = launcher._pid
@@ -118,7 +153,7 @@ func _run() -> void:
 	check(screen._process_menu == null and launcher.is_busy() and launcher._pid == running_pid, "process menu resumes original process and releases focus")
 	check(not launcher._handoff_seen and launcher._handoff_shell_ticks == 0, "resume restarts the handoff focus check")
 	launcher._app_is_up()
-	await press(JOY_BUTTON_BACK)
+	await press(JOY_BUTTON_GUIDE)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_DPAD_DOWN) # Audio -> Minimize.
 	await press(JOY_BUTTON_A)
@@ -126,7 +161,7 @@ func _run() -> void:
 	await press(JOY_BUTTON_A)
 	check(launcher.is_busy() and launcher._pid == running_pid, "library resumes original process without relaunch")
 	launcher._app_is_up()
-	await press(JOY_BUTTON_BACK)
+	await press(JOY_BUTTON_GUIDE)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_DPAD_DOWN) # Audio -> Minimize.
 	await press(JOY_BUTTON_DPAD_DOWN) # Minimize -> Close.
@@ -135,6 +170,9 @@ func _run() -> void:
 	check(not launcher.is_busy() and screen.visible, "controller closes app and restores home")
 	check(root.gui_get_focus_owner() == screen._cards[0], "library focus restored after exit")
 	await press(JOY_BUTTON_START)
+	check(screen._card_menu != null, "library Options opens supported game actions")
+	screen._card_menu._rows.back().grab_focus()
+	await press(JOY_BUTTON_A)
 	check(installs._confirmation != null, "library Options opens removal confirmation")
 	check(root.gui_get_focus_owner() == installs._confirmation._rows[0], "removal defaults to Cancel")
 	var before_remove := DirAccess.get_files_at(home.path_join("requests")).size()
@@ -142,6 +180,8 @@ func _run() -> void:
 	check(installs._confirmation == null and screen.visible, "Back cancels removal and restores home")
 	check(DirAccess.get_files_at(home.path_join("requests")).size() == before_remove, "cancel removes no application")
 	await press(JOY_BUTTON_START)
+	screen._card_menu._rows.back().grab_focus()
+	await press(JOY_BUTTON_A)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_A)
 	check(DirAccess.get_files_at(home.path_join("requests")).size() == before_remove + 1, "confirmed controller removal writes one request")

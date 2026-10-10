@@ -45,6 +45,12 @@ extends Node
 ## below in it settles the geometry permanently.
 
 
+var _native_pointer_visible := false
+
+func set_native_pointer_visible(value: bool) -> void:
+	_native_pointer_visible = value
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if value or _windowed_for_desk() else Input.MOUSE_MODE_HIDDEN
+
 func _ready() -> void:
 	_assert_display_policy()
 	if _windowed_for_desk():
@@ -139,7 +145,9 @@ func _assert_display_policy() -> void:
 	# pointer and feeds relative motion, which is what a first-person game wants
 	# and would make a stray mouse generate a stream of events into a UI that has
 	# no use for them. Hidden is exactly the requirement: no cursor.
-	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
+	# Native browser panels use the X pointer instead of the shell's drawn one.
+	# Preserve that pointer through focus changes to the panel toolbar/keyboard.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _native_pointer_visible else Input.MOUSE_MODE_HIDDEN
 
 
 ## Everything the shell can see about the displays, in the journal.

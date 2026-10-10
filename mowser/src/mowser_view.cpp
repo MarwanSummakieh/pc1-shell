@@ -1,8 +1,12 @@
 #include "mowser_view.h"
+#include "mowser_extensions.h"
 
 #include <algorithm>
+#include <filesystem>
 
 #include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
@@ -139,14 +143,25 @@ void MowserView::Sink::sink_keyboard_context(bool editable, const std::string &t
     view_->emit_signal("keyboard_context_changed", context);
 }
 
-void MowserView::reveal_focused_field() {
+void MowserView::reveal_focused_field(const godot::Rect2 &occlusion) {
     if (!client_ || !client_->browser()) return;
     auto frame = client_->browser()->GetFocusedFrame();
-    if (frame) frame->ExecuteJavaScript(
-        "requestAnimationFrame(()=>{let e=document.activeElement;"
-        "while(e&&e.shadowRoot&&e.shadowRoot.activeElement)e=e.shadowRoot.activeElement;"
-        "if(e&&e!==document.body)e.scrollIntoView({block:'nearest',inline:'nearest'});});",
-        frame->GetURL(), 0);
+    if (!frame) return;
+    // Metadata and geometry only: never read the editor's value. Keep the
+    // document's width stable and scroll only if the floating keys cover it.
+    auto script = String("requestAnimationFrame(()=>{let e=document.activeElement;") +
+        "while(e&&e.shadowRoot&&e.shadowRoot.activeElement)e=e.shadowRoot.activeElement;" +
+        "if(!e||e===document.body)return;e.scrollIntoView({block:'nearest',inline:'nearest'});" +
+        "const r=e.getBoundingClientRect(),x=" + String::num(occlusion.position.x) +
+        ",y=" + String::num(occlusion.position.y) + ",w=" + String::num(occlusion.size.x) +
+        ",h=" + String::num(occlusion.size.y) + ";" +
+        "if(r.right>x&&r.left<x+w&&r.bottom>y&&r.top<y+h){" +
+        "const above=y-16,below=y+h+16;" +
+        "const delta=above>=r.height?r.bottom-above:r.top-below;" +
+        "let p=e.parentElement;while(p&&p!==document.body){" +
+        "if(p.scrollHeight>p.clientHeight&&/(auto|scroll)/.test(getComputedStyle(p).overflowY)){p.scrollTop+=delta;return;}p=p.parentElement;}" +
+        "window.scrollBy(0,delta);}});";
+    frame->ExecuteJavaScript(script.utf8().get_data(), frame->GetURL(), 0);
 }
 
 void MowserView::_bind_methods() {
@@ -158,7 +173,7 @@ void MowserView::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_download_directory", "path"), &MowserView::set_download_directory);
     ClassDB::bind_method(D_METHOD("cancel_download", "id"), &MowserView::cancel_download);
     ADD_SIGNAL(MethodInfo("download_updated", PropertyInfo(Variant::DICTIONARY, "download")));
-    ClassDB::bind_method(D_METHOD("reveal_focused_field"), &MowserView::reveal_focused_field);
+    ClassDB::bind_method(D_METHOD("reveal_focused_field", "occlusion"), &MowserView::reveal_focused_field);
     ADD_SIGNAL(MethodInfo("keyboard_context_changed", PropertyInfo(Variant::DICTIONARY, "context")));
     ClassDB::bind_method(D_METHOD("load_url", "url"), &MowserView::load_url);
     ClassDB::bind_method(D_METHOD("reload"), &MowserView::reload);
@@ -173,6 +188,17 @@ void MowserView::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_page_title"), &MowserView::get_page_title);
     ClassDB::bind_method(D_METHOD("is_engine_running"), &MowserView::is_engine_running);
     ClassDB::bind_method(D_METHOD("get_engine_failure"), &MowserView::get_engine_failure);
+    ClassDB::bind_method(D_METHOD("set_extension_paths", "paths"), &MowserView::set_extension_paths);
+    ClassDB::bind_method(D_METHOD("get_active_extension_paths"), &MowserView::get_active_extension_paths);
+    ClassDB::bind_method(D_METHOD("open_extensions", "manage"), &MowserView::open_extensions);
+    ClassDB::bind_method(D_METHOD("open_extension_page", "url"), &MowserView::open_extension_page);
+    ClassDB::bind_method(D_METHOD("get_extension_page_url"), &MowserView::get_extension_page_url);
+    ClassDB::bind_method(D_METHOD("is_extension_window_open"), &MowserView::is_extension_window_open);
+    ClassDB::bind_method(D_METHOD("extension_command", "command"), &MowserView::extension_command);
+    ClassDB::bind_method(D_METHOD("set_extension_panel_rect", "bounds"), &MowserView::set_extension_panel_rect);
+    ClassDB::bind_method(D_METHOD("get_extension_panel_handle"), &MowserView::get_extension_panel_handle);
+    ClassDB::bind_method(D_METHOD("extension_type_text", "text"), &MowserView::extension_type_text);
+    ClassDB::bind_method(D_METHOD("extension_editing_key", "key_name"), &MowserView::extension_editing_key);
     ClassDB::bind_method(D_METHOD("set_pointer", "position"), &MowserView::set_pointer);
     ClassDB::bind_method(D_METHOD("get_pointer"), &MowserView::get_pointer);
     ClassDB::bind_method(D_METHOD("move_pointer", "delta"), &MowserView::move_pointer);
@@ -191,6 +217,88 @@ void MowserView::_bind_methods() {
                           PropertyInfo(Variant::STRING, "reason")));
     ADD_SIGNAL(MethodInfo("title_changed", PropertyInfo(Variant::STRING, "title")));
     ADD_SIGNAL(MethodInfo("url_changed", PropertyInfo(Variant::STRING, "url")));
+}
+
+bool MowserView::set_extension_paths(const PackedStringArray &paths) {
+    const std::string requested_root = ProjectSettings::get_singleton()->globalize_path(
+        "user://browser-extensions").utf8().get_data();
+    std::error_code root_error;
+    const std::string root = std::filesystem::weakly_canonical(requested_root, root_error).string();
+    // An empty configuration always disables remembered user extensions,
+    // even if the managed directory itself is inaccessible or contains a comma.
+    if (paths.is_empty()) return Runtime::set_extension_paths({}, requested_root);
+    if (root_error || root.find(',') != std::string::npos) return false;
+    std::vector<std::string> selected;
+    for (int64_t i = 0; i < paths.size(); ++i) {
+        std::filesystem::path path(paths[i].utf8().get_data());
+        std::error_code error;
+        // Only direct, real package directories managed by the shell may load.
+        const auto resolved = std::filesystem::canonical(path, error);
+        if (error || resolved.parent_path() != std::filesystem::path(root) ||
+            resolved.string().find(',') != std::string::npos ||
+            !std::filesystem::is_regular_file(resolved / "manifest.json", error) || error) return false;
+        selected.push_back(resolved.string());
+    }
+    return Runtime::set_extension_paths(selected, root);
+}
+
+PackedStringArray MowserView::get_active_extension_paths() const {
+    PackedStringArray result;
+    for (const auto &path : Runtime::extension_paths()) result.append(String(path.c_str()));
+    return result;
+}
+
+bool MowserView::open_extensions(bool manage) {
+    return open_extension_window(manage ? "chrome://extensions/" :
+        "https://chromewebstore.google.com/category/extensions");
+}
+
+bool MowserView::is_extension_window_open() const { return extension_window_open(); }
+
+bool MowserView::open_extension_page(const String &url) {
+    return open_extension_window(url.utf8().get_data());
+}
+
+String MowserView::get_extension_page_url() const {
+    return String(extension_page_url().c_str());
+}
+
+void MowserView::extension_command(const String &command) {
+    extension_window_command(command.utf8().get_data());
+}
+
+void MowserView::set_extension_panel_rect(const Rect2 &bounds) {
+    set_extension_panel_bounds(int(bounds.position.x), int(bounds.position.y),
+                               int(bounds.size.x), int(bounds.size.y));
+}
+
+int64_t MowserView::get_extension_panel_handle() const {
+    return int64_t(extension_panel_handle());
+}
+
+void MowserView::extension_type_text(const String &text) {
+    const auto handle = extension_panel_handle();
+    if (!handle || text.is_empty()) return;
+    // Chrome-style native windows need native X input. SendKeyEvent targets
+    // the off-screen renderer and does not edit these native fields.
+    Array output;
+    OS::get_singleton()->execute("/usr/bin/timeout", PackedStringArray({
+        "1", "xdotool", "windowfocus", "--sync", String::num_int64(handle), "type",
+        "--clearmodifiers", "--delay", "0", "--", text}), output);
+}
+
+void MowserView::extension_editing_key(const String &key_name) {
+    for (const EditingKey &key : kEditingKeys) {
+        if (key_name == String(key.name)) {
+            const auto handle = extension_panel_handle();
+            if (!handle) return;
+            Array output;
+            OS::get_singleton()->execute("/usr/bin/timeout", PackedStringArray({
+                "1", "xdotool", "windowfocus", "--sync", String::num_int64(handle),
+                "key", "--clearmodifiers", key_name}), output);
+            return;
+        }
+    }
 }
 
 void MowserView::_ready() {

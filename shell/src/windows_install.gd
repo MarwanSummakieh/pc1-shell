@@ -60,7 +60,7 @@ func guided_install(path: String) -> void:
 	if path == guided_source and _guided_pid > 0:
 		resume_guided()
 		return
-	if is_busy() or not Launcher.current_entry().is_empty():
+	if is_busy() or (not Launcher.current_entry().is_empty() and not Launcher.is_minimized()):
 		message = "Finish the current installation or close the running app first."
 		changed.emit()
 		return
@@ -126,19 +126,45 @@ func _local_finished(entry: Dictionary) -> void:
 	changed.emit()
 
 
-func register_local(key: String, choice: String) -> void:
-	if OS.create_process(helper, ["register", key, choice]) <= 0:
+func register_local(key: String, choice: String, input_mode: String = "pointer") -> void:
+	if OS.create_process(helper, ["register", key, choice, input_mode]) <= 0:
 		message = "Could not add this program. Try again."
 		changed.emit()
 
 
+func open_download(path: String) -> void:
+	if is_busy() or is_open() or (Launcher.is_busy() and not Launcher.is_minimized()):
+		return
+	_screen = InstallScreen.new()
+	_screen.source_path = path
+	_screen.source_name = path.get_file()
+	_screen.closed.connect(_finish, CONNECT_ONE_SHOT)
+	opened.emit()
+	get_tree().root.add_child(_screen)
+	guided_install.call_deferred(path)
+
+
+func open_selection(entry: Dictionary) -> void:
+	if is_busy() or is_open() or Launcher.is_busy() or Files.is_open() or Browser.is_open() or Settings.is_open() or Power.is_open() or Info.is_open() or Downloads.is_open():
+		return
+	_screen = InstallScreen.new()
+	_screen.source_path = str(entry.get("source", ""))
+	_screen.source_name = str(entry.get("title", "Windows setup"))
+	_screen.closed.connect(_finish, CONNECT_ONE_SHOT)
+	opened.emit()
+	get_tree().root.add_child(_screen)
+
+
 func confirm_remove(entry: Dictionary) -> void:
+	if entry.has("setup_id"):
+		confirm_discard({"id": entry["setup_id"]})
+		return
 	var key := str(entry.get("recipe_id", ""))
 	if key.is_empty() or not str(entry.get("id", "")).begins_with("managed."):
 		return
 	_confirm("Remove %s?" % str(entry.get("title", "application")),
-		"Removes this app and its saved data. Portable source files are kept." if bool(entry.get("portable", false)) else
-		"Removes this app and its saved data from this machine.", "Remove app", "remove", key)
+		"Removes this app for every user. Profile saves and portable source files are kept." if bool(entry.get("portable", false)) else
+		"Removes this app for every user. Profile saves are kept.", "Remove app", "remove", key)
 
 
 func confirm_discard(job: Dictionary) -> void:
@@ -232,10 +258,13 @@ func _poll_local() -> void:
 		local_jobs = jobs
 		_local_libraries = apps
 		changed.emit()
+		var installed := get_node_or_null("/root/Installed")
+		if installed != null:
+			installed._poll()
 
 
 func open() -> void:
-	if is_open() or Launcher.is_busy() or Settings.is_open() or Power.is_open() or Info.is_open() or Files.is_open() or Browser.is_open():
+	if is_open() or Launcher.is_busy() or Settings.is_open() or Power.is_open() or Info.is_open() or Files.is_open() or Browser.is_open() or Downloads.is_open():
 		return
 	_screen = InstallScreen.new()
 	_screen.closed.connect(_finish, CONNECT_ONE_SHOT)
@@ -287,9 +316,10 @@ func _request(request: Dictionary) -> void:
 		DirAccess.remove_absolute(path + ".tmp")
 		message = "Could not start the request. Try again."
 	else:
-		_pending_until = Time.get_ticks_msec() + 10000
-		message = "Cancelling installation…" if request["verb"] == "cancel" else (
-			"Removing application…" if request["verb"] in ["remove", "discard"] else "Starting installation…")
+		if request["verb"] not in ["download", "download-action"]:
+			_pending_until = Time.get_ticks_msec() + 10000
+			message = "Cancelling installation…" if request["verb"] == "cancel" else (
+				"Removing application…" if request["verb"] in ["remove", "discard"] else "Starting installation…")
 		ShellLog.info("Windows request: %s" % JSON.stringify(request))
 	changed.emit()
 
@@ -355,4 +385,23 @@ func library() -> Array:
 				found = true
 		if not found:
 			result.append(app)
+	for job in local_jobs:
+		if str(job.get("status", "")) not in ["select", "failed"] or job.get("choices", []).is_empty():
+			continue
+		var key := str(job.get("id", ""))
+		var committed := false
+		for entry in result:
+			if str(entry.get("recipe_id", "")) == key:
+				committed = true
+		if committed:
+			continue
+		var source := str(job.get("source", ""))
+		var title := source.get_base_dir().get_file()
+		for choice in job.get("choices", []):
+			if choice.get("shortcut", false) or choice.get("primary", false):
+				title = str(choice.get("title", title))
+				break
+		result.append({"id": "setup." + key, "setup_id": key, "source": source,
+			"title": title, "subtitle": "Finish adding — choose the program to play",
+			"state": "select", "exec": [], "icon": ""})
 	return result

@@ -34,6 +34,8 @@ extends PanelContainer
 const TvTheme = preload("res://src/tv_theme.gd")
 const FileItem = preload("res://src/file_item.gd")
 const FileThumbs = preload("res://src/file_thumbs.gd")
+const ConsoleButton = preload("res://src/console_button.gd")
+const FileTrash = preload("res://src/file_trash.gd")
 
 ## A on an item. The screen decides what opening means -- descend, view, launch
 ## or explain -- because only it knows about the launch seam and the viewer.
@@ -117,6 +119,10 @@ var _empty: Label = null
 var _crumbs: Array = []
 var _items: Array = []
 var _columns: int = 1
+var _summary: Label
+var _detail_header: HBoxContainer
+var _size_heading: Label
+var _date_heading: Label
 
 var _thumbs: FileThumbs = FileThumbs.new()
 var _active := false
@@ -130,8 +136,8 @@ func _ready() -> void:
 
 	var pad := MarginContainer.new()
 	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.add_theme_constant_override("margin_left", TvTheme.FILES_PANE_PAD)
-	pad.add_theme_constant_override("margin_right", TvTheme.FILES_PANE_PAD)
+	pad.add_theme_constant_override("margin_left", 4)
+	pad.add_theme_constant_override("margin_right", 4)
 	pad.add_theme_constant_override("margin_top", TvTheme.FILES_PANE_PAD)
 	pad.add_theme_constant_override("margin_bottom", TvTheme.FILES_PANE_PAD)
 	add_child(pad)
@@ -157,6 +163,36 @@ func _ready() -> void:
 	_crumb_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_crumb_bar.add_theme_constant_override("separation", 6)
 	_crumb_scroll.add_child(_crumb_bar)
+	_summary = Label.new()
+	_summary.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
+	_summary.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(_summary)
+	_detail_header = HBoxContainer.new()
+	_detail_header.add_theme_constant_override("separation", TvTheme.HINT_GLYPH_GAP)
+	var header_pad := MarginContainer.new()
+	header_pad.add_theme_constant_override("margin_left", TvTheme.SETTINGS_ROW_PAD)
+	header_pad.add_theme_constant_override("margin_right", TvTheme.SETTINGS_ROW_PAD)
+	column.add_child(header_pad)
+	header_pad.add_child(_detail_header)
+	var name_heading := Label.new()
+	name_heading.text = "Name"
+	name_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_header.add_child(name_heading)
+	for spec in [["Size", 150], ["Modified", 230]]:
+		var heading := Label.new()
+		heading.text = spec[0]
+		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		heading.custom_minimum_size.x = spec[1]
+		_detail_header.add_child(heading)
+	_size_heading = _detail_header.get_child(1)
+	_date_heading = _detail_header.get_child(2)
+	for heading in _detail_header.get_children():
+		heading.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
+		heading.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	var headings_box := StyleBoxEmpty.new()
+	headings_box.content_margin_left = TvTheme.SIZE_BODY + 8 + TvTheme.FILES_ROW_GLYPH_SIZE + 2 * TvTheme.HINT_GLYPH_GAP
+	name_heading.add_theme_stylebox_override("normal", headings_box)
 
 	_scroll = ScrollContainer.new()
 	# The settings screen's scrolling, for the settings screen's reason: a long
@@ -171,7 +207,7 @@ func _ready() -> void:
 	_grid = GridContainer.new()
 	_grid.columns = 1
 	_grid.add_theme_constant_override("h_separation", TvTheme.SETTINGS_ROW_GAP)
-	_grid.add_theme_constant_override("v_separation", TvTheme.SETTINGS_ROW_GAP)
+	_grid.add_theme_constant_override("v_separation", 4)
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_scroll.add_child(_grid)
@@ -206,6 +242,9 @@ func _ready() -> void:
 ## to do here. Details rows are decided by `narrow`, not by measurement; see
 ## _detail_columns for why that distinction was paid for.
 func _on_resized() -> void:
+	if _detail_header == null:
+		return
+	_fit_columns()
 	if mode == MODE_DETAILS or _items.is_empty():
 		return
 	var wanted := _column_count()
@@ -250,7 +289,7 @@ func show_directory(new_path: String, focus_name: String = "") -> bool:
 	if path != new_path:
 		if not _history_jump:
 			_history = _history.slice(0, _history_index + 1)
-			_history.append(new_path)
+			_history.append({"path": new_path, "root": place_root, "label": place_label})
 			_history_index = _history.size() - 1
 	path = new_path
 	# Everything queued for the folder we are leaving is abandoned. Without
@@ -305,6 +344,8 @@ func go_up() -> void:
 ## browsed as icons is the case this exists for, and it is also the biggest
 ## folder anyone will point this at.
 func _read(dir_path: String) -> Variant:
+	if dir_path == FileTrash.LOCATION:
+		return _read_trash()
 	var dir := DirAccess.open(dir_path)
 	if dir == null:
 		ShellLog.warn("files: could not open %s (%s)"
@@ -337,6 +378,28 @@ func _read(dir_path: String) -> Variant:
 	# this screen offers to turn off: a directory is a place and a file is a
 	# thing, and interleaving them by size puts a 4 KB folder between two
 	# photographs for no reason anyone navigating has.
+	return {"dirs": dirs, "files": files}
+
+
+func _read_trash() -> Dictionary:
+	var dirs: Array = []
+	var files: Array = []
+	var stored := FileTrash.trash_root().path_join("files")
+	var dir := DirAccess.open(stored)
+	if dir != null:
+		for entry in FileTrash.entries():
+			var caption := str(entry["name"])
+			if not search_text.is_empty() and not caption.to_lower().contains(search_text.to_lower()):
+				continue
+			var id := str(entry["id"])
+			var folder := DirAccess.dir_exists_absolute(stored.path_join(id)) and not dir.is_link(id)
+			var record := _entry(dir, stored, id, folder, true)
+			record["name"] = caption
+			record["trash_id"] = id
+			record["original_path"] = entry["path"]
+			(dirs if folder else files).append(record)
+	_sort(dirs)
+	_sort(files)
 	return {"dirs": dirs, "files": files}
 
 
@@ -413,6 +476,8 @@ static func _name_less(a: Dictionary, b: Dictionary) -> bool:
 
 func _build_items(listing: Dictionary) -> void:
 	_empty.text = "Nothing in this folder" if search_text.is_empty() else "No matching files"
+	if path == FileTrash.LOCATION and search_text.is_empty():
+		_empty.text = "Trash bin is empty"
 	for item in _items:
 		_grid.remove_child(item)
 		item.queue_free()
@@ -447,31 +512,35 @@ func _build_items(listing: Dictionary) -> void:
 			_thumbs.request(str(entry["path"]), item)
 
 	_empty.visible = _items.is_empty()
+	_refresh_summary()
+	_fit_columns()
 	_wire_focus()
 
 
-## WHICH DETAILS COLUMNS THIS PANE CAN AFFORD, and the floor the name keeps.
-##
-## Dolphin resizes its columns with a mouse. There is no mouse, so the choice
-## is made from `narrow`, which the SCREEN sets when it opens or closes the
-## split -- see FilePane.set_narrow.
-##
-## MEASURING THE PANE'S OWN RECT WAS TRIED FIRST AND WAS WRONG, which is worth
-## recording because it is the obvious implementation. A measured budget
-## changes on a resize notification, a resize notification therefore has to
-## rebuild the rows, and rebuilding rows deferred out of a layout pass meant
-## the listing could be replaced under a press that was already in flight --
-## which the Xvfb run caught as a Return that re-listed the current folder
-## instead of entering the one under the cursor. The split state is the same
-## information arriving a frame earlier, from the object that decided it, with
-## no feedback loop through layout.
+func _refresh_summary() -> void:
+	_summary.text = "%d item%s · %s %s" % [_items.size(), "" if _items.size() == 1 else "s",
+		{"name": "Name", "size": "Size", "date": "Modified", "type": "Type"}.get(sort_key, "Name"),
+		"↓" if sort_descending else "↑"]
+	if not search_text.is_empty():
+		_summary.text += " · Search: " + search_text
+	if _active:
+		_summary.text = "Active pane · " + _summary.text
+
+
+func _fit_columns() -> void:
+	var columns := _detail_columns()
+	_detail_header.visible = mode == MODE_DETAILS and not _items.is_empty()
+	_size_heading.visible = columns["size"]
+	_date_heading.visible = columns["date"]
+	for item in _items:
+		item.fit_columns(columns["size"], columns["date"], columns["floor"])
+
+
+## Hide date, then size as the pane narrows. Existing rows change their column
+## visibility in place, preserving the focused node and any press in flight.
 func _detail_columns() -> Dictionary:
-	if narrow:
-		# The date goes first, because "how big" is the question a file manager
-		# gets asked and "when" is the one it gets asked about the folder rather
-		# than about the row.
-		return {"size": true, "date": false, "floor": 200}
-	return {"size": true, "date": true, "floor": 260}
+	var width := size.x if size.x > 0 else (640.0 if narrow else 1200.0)
+	return {"size": width >= 600, "date": width >= 1000, "floor": 60}
 
 
 ## How many columns fit. Measured off the pane's real width rather than off
@@ -578,23 +647,15 @@ func _build_crumbs() -> void:
 
 
 func _build_crumb(label: String, crumb_path: String, is_last: bool) -> Button:
-	var crumb := Button.new()
-	crumb.text = "  %s  " % label
+	var crumb := ConsoleButton.new()
+	crumb.text = label
+	crumb.active = is_last
 	crumb.focus_mode = Control.FOCUS_ALL
 	crumb.custom_minimum_size = Vector2(0, TvTheme.FILES_COMPACT_HEIGHT - 8)
 	crumb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	crumb.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
 	# The LAST crumb is where you are, and it is drawn as the lit one -- the
 	# same "you are here" the path label used to carry as plain text.
-	var idle := TvTheme.file_item_box(is_last, false)
-	crumb.add_theme_stylebox_override("normal", idle)
-	crumb.add_theme_stylebox_override("hover", idle)
-	crumb.add_theme_stylebox_override("pressed", TvTheme.file_item_box(is_last, true))
-	crumb.add_theme_stylebox_override("focus", TvTheme.card_focus_ring())
-	crumb.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
-	crumb.add_theme_color_override("font_focus_color", TvTheme.TEXT_PRIMARY)
-	crumb.add_theme_color_override("font_hover_color", TvTheme.TEXT_PRIMARY)
-	crumb.add_theme_color_override("font_pressed_color", TvTheme.TEXT_PRIMARY)
 	crumb.set_meta("crumb_path", crumb_path)
 	crumb.pressed.connect(_on_crumb_pressed.bind(crumb))
 	crumb.focus_entered.connect(_on_any_focus)
@@ -816,6 +877,8 @@ func set_active(value: bool) -> void:
 		return
 	_active = value
 	add_theme_stylebox_override("panel", TvTheme.pane_frame(value))
+	if _summary != null:
+		_refresh_summary()
 
 
 ## Sharing the screen, or not. Re-lists only when the answer changed and only
@@ -863,9 +926,16 @@ func history_move(direction: int) -> bool:
 	var next := _history_index + direction
 	if next < 0 or next >= _history.size():
 		return false
+	var previous_root := place_root
+	var previous_label := place_label
+	place_root = str(_history[next]["root"])
+	place_label = str(_history[next]["label"])
 	_history_jump = true
-	var result := show_directory(str(_history[next]))
+	var result := show_directory(str(_history[next]["path"]))
 	_history_jump = false
 	if result:
 		_history_index = next
+	else:
+		place_root = previous_root
+		place_label = previous_label
 	return result

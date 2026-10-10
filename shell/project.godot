@@ -24,7 +24,7 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 ; test is a frame-by-frame camera recording with zero frames of anything but the
 ; plymouth splash and the shell, so this is turned off rather than themed.
 boot_splash/show_image=false
-boot_splash/bg_color=Color(0.078431, 0.086275, 0.101961, 1)
+boot_splash/bg_color=Color(0.066667, 0.086275, 0.109804, 1)
 
 ; stdout is a pipe into the journal -- marwanos-session re-execs itself through
 ; `systemd-cat` and the client inherits those descriptors -- and a pipe is
@@ -39,6 +39,7 @@ run/flush_stdout_on_print=true
 ; Order is load-bearing only in that ShellLog must exist before anything logs.
 ; Autoloads are added to the scene root in the order listed here.
 ShellLog="*res://src/shell_log.gd"
+Profiles="*res://src/profiles.gd"
 Kiosk="*res://src/kiosk.gd"
 ShellInput="*res://src/shell_input.gd"
 ControllerRouter="*res://src/controller_router.gd"
@@ -46,11 +47,15 @@ PlayerOne="*res://src/player_one.gd"
 FocusRepeat="*res://src/focus_repeat.gd"
 SystemStatus="*res://src/system_status.gd"
 Notifications="*res://src/notifications.gd"
+Metadata="*res://src/metadata.gd"
+Achievements="*res://src/achievements.gd"
+PlayHistory="*res://src/play_history.gd"
 Installed="*res://src/installed.gd"
 Services="*res://src/services.gd"
 Apps="*res://src/apps.gd"
 Wifi="*res://src/wifi.gd"
 Audio="*res://src/audio.gd"
+Bluetooth="*res://src/bluetooth.gd"
 Updates="*res://src/updates.gd"
 DisplayProfile="*res://src/display.gd"
 WindowProfile="*res://src/window_profile.gd"
@@ -63,8 +68,12 @@ Info="*res://src/info.gd"
 ; and Info, so all three must already exist when it loads.
 Setup="*res://src/setup.gd"
 WindowsInstall="*res://src/windows_install.gd"
+Downloads="*res://src/downloads.gd"
+DownloadInstall="*res://src/download_install.gd"
 Files="*res://src/files.gd"
 Browser="*res://src/browser.gd"
+SteamEmbed="*res://src/steam_embed.gd"
+TextInput="*res://src/text_input.gd"
 
 [display]
 
@@ -131,4 +140,4 @@ theme/default_font_size=30
 ; Matches TvTheme.BACKGROUND. The clear colour is what shows during the first
 ; frames and behind a hidden scene, and a default light-grey flash would be a
 ; text-free but very visible failure of M2's camera test.
-environment/defaults/default_clear_color=Color(0.078431, 0.086275, 0.101961, 1)
+environment/defaults/default_clear_color=Color(0.066667, 0.086275, 0.109804, 1)

@@ -53,7 +53,7 @@ func _run() -> void:
 	# process with this app's WINEPREFIX, like a leftover setup wizard.
 	var unrelated_window := OS.get_environment("PC1_UNRELATED_WINDOW").to_int()
 	check(unrelated_window > 0 and not root.get_node("Kiosk")._window_belongs_to_app(unrelated_window, pid), "same-prefix unrelated process cannot complete launch focus")
-	await press(JOY_BUTTON_BACK)
+	await press(JOY_BUTTON_GUIDE)
 	check(screen._overlay != null, "controller opens real app overlay")
 	check(not root.get_node("ControllerRouter")._app_input, "overlay keeps application controller neutral")
 	await press(JOY_BUTTON_DPAD_DOWN)
@@ -70,7 +70,7 @@ func _run() -> void:
 		check(root.get_node("Kiosk").focused_window() == root.get_node("Kiosk").Focus.ELSEWHERE, "Openbox gives actual foreground focus to app")
 	check(root.get_node("Kiosk").focus_app_keyboard(), "typing targets real app keyboard focus")
 	for cycle in 3:
-		await press(JOY_BUTTON_BACK)
+		await press(JOY_BUTTON_GUIDE)
 		await press(JOY_BUTTON_DPAD_DOWN)
 		await press(JOY_BUTTON_DPAD_DOWN) # Audio -> Minimize.
 		await press(JOY_BUTTON_A)
@@ -81,7 +81,7 @@ func _run() -> void:
 		launcher.launch(entry)
 		await wait_app(launcher)
 		check(launcher.app_on_screen() and launcher._pid == pid, "repeat %d resumes original process" % cycle)
-	await press(JOY_BUTTON_BACK)
+	await press(JOY_BUTTON_GUIDE)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_DPAD_DOWN) # Minimize -> Close.

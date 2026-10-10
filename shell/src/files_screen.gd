@@ -1,6 +1,7 @@
 extends Control
 
-## THE FILE MANAGER: Dolphin's shape, drawn by the shell, read by the pad.
+## Files uses the OS surfaces and controls: attached Places, a quiet listing,
+## and an attached footer. Compact windows open Places as a full-width drawer.
 ##
 ## WHY A REDRAW AND NOT DOLPHIN. The Dolphin flatpak shipped here once and was
 ## removed, and the reason it is not coming back is not pride of authorship. It
@@ -15,7 +16,7 @@ extends Control
 ##
 ## THE PIECES, and each is its own file for a reason worth keeping:
 ##
-##   places_panel.gd  the left column. Always on screen -- it used to be a
+##   places_panel.gd  the left column, or compact drawer. It used to be a
 ##                    VIEW you backed out to, which made getting from a stick
 ##                    to Downloads five presses.
 ##   file_pane.gd     one pane: breadcrumb, listing, sort, view mode,
@@ -25,7 +26,7 @@ extends Control
 ##   file_open.gd     what opens what: the built-in viewer, the browser, or
 ##                    an honest sentence.
 ##   image_viewer.gd  a picture fullscreen, with the folder under left/right.
-##   file_properties.gd  Dolphin's properties dialog, at reading distance.
+##   file_properties.gd  an edge-attached, scrollable properties panel.
 ##
 ## THIS FILE IS THE COMPOSITION AND THE CONSEQUENCES. Layout, focus between
 ## regions, the clipboard, every file operation, the two menus, the status
@@ -36,9 +37,9 @@ extends Control
 ##   A         open -- descend, view a picture, launch a handler, or say why not
 ##   B         up one level; at a place's root, out to the Places column
 ##   X         select / deselect the thing under the cursor
-##   Y         the VIEW menu: mode, sort, hidden files, split, select all
+##   Y         search the current folder
 ##   OPTIONS   the ACTIONS menu: open, copy, cut, paste, rename, delete,
-##             new folder, properties -- and eject, on a drive in Places
+##             new folder, properties, view settings -- and eject, on a drive in Places
 ##   L1 / R1   jump between the two panes in a split view
 ##
 ## THE VERBS ACT ON THE SELECTION IF THERE IS ONE AND ON THE CURSOR IF NOT.
@@ -64,6 +65,7 @@ var _picker_done := false
 var initial_directory := ""
 
 const TvTheme = preload("res://src/tv_theme.gd")
+const ConsoleButton = preload("res://src/console_button.gd")
 const ListMenu = preload("res://src/list_menu.gd")
 const FilePane = preload("res://src/file_pane.gd")
 const PlacesPanel = preload("res://src/places_panel.gd")
@@ -97,7 +99,16 @@ var _pane_two_touched := false
 var _pane_row: HBoxContainer = null
 var _heading: Label = null
 var _status: Label = null
-var _hints: HBoxContainer = null
+var _hints: HFlowContainer = null
+var _body: HBoxContainer
+var _content: MarginContainer
+var _footer_pad: MarginContainer
+var _places_button: Button
+var _selection: Label
+var _compact := false
+var _places_open := false
+var _places_from_back := false
+var _pane_cursor: Control
 
 ## The clipboard: {"paths": Array, "cut": bool}, empty when nothing is armed.
 ## SCREEN-LIFETIME ON PURPOSE: it survives navigating anywhere within the
@@ -118,6 +129,7 @@ var _browser: Control = null
 ## keeps Files alive underneath it so Back returns to the directory and item
 ## that started the flow.
 var _installer: Control = null
+var _downloads: Control = null
 var _properties: FileProperties = null
 
 ## What the open menu is about, captured when OPTIONS is pressed -- by the time
@@ -126,6 +138,7 @@ var _menu_targets: Array = []
 var _menu_place: Dictionary = {}
 var _keyboard_purpose: String = ""
 var _return_focus_name: String = ""
+var _next_menu := ""
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -136,43 +149,56 @@ func _ready() -> void:
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(background)
 
-	# The full TV-safe inset, all four edges. Everything on this screen is text
-	# or carries a focus ring; nothing has the rail's licence to bleed.
-	var safe := MarginContainer.new()
-	safe.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	safe.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	safe.add_theme_constant_override("margin_left", TvTheme.SAFE_MARGIN_X)
-	safe.add_theme_constant_override("margin_right", TvTheme.SAFE_MARGIN_X)
-	safe.add_theme_constant_override("margin_top", TvTheme.SAFE_MARGIN_Y)
-	safe.add_theme_constant_override("margin_bottom", TvTheme.SAFE_MARGIN_Y)
-	add_child(safe)
+	var layout := VBoxContainer.new()
+	layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layout.add_theme_constant_override("separation", 0)
+	add_child(layout)
+	_body = HBoxContainer.new()
+	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_body.add_theme_constant_override("separation", 0)
+	layout.add_child(_body)
+	_places = PlacesPanel.new()
+	_places.include_trash = not picker_mode
+	_places.place_chosen.connect(_on_place_chosen)
+	_places.became_active.connect(_on_places_active)
+	_places.mounts_changed.connect(_on_mounts_changed)
+	_body.add_child(_places)
+	_content = MarginContainer.new()
+	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_body.add_child(_content)
 
 	var column := VBoxContainer.new()
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_theme_constant_override("separation", TvTheme.SETTINGS_ROW_GAP)
-	safe.add_child(column)
+	column.add_theme_constant_override("separation", 20)
+	_content.add_child(column)
 
-	# The heading carries the SELECTION COUNT, and that is the one place it can
-	# go: with two panes up there is no single list to put "3 selected" at the
-	# top of, and the status line below is a sentence about the last operation.
+	# Keep selection separate from the page title and operation feedback.
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 24)
+	column.add_child(header)
+	_places_button = ConsoleButton.new()
+	_places_button.text = "Places"
+	_places_button.pressed.connect(_show_places)
+	_places_button.focus_entered.connect(_refresh_hints)
+	header.add_child(_places_button)
 	_heading = Label.new()
 	_heading.text = "Files"
 	_heading.add_theme_font_size_override("font_size", TvTheme.SIZE_WORDMARK)
 	_heading.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
 	_heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(_heading)
+	_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	header.add_child(_heading)
+	_selection = Label.new()
+	_selection.add_theme_font_size_override("font_size", TvTheme.SIZE_SUPPLEMENTAL)
+	_selection.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	header.add_child(_selection)
 
 	_pane_row = HBoxContainer.new()
 	_pane_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_pane_row.add_theme_constant_override("separation", TvTheme.FILES_PANE_GAP)
 	_pane_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(_pane_row)
-
-	_places = PlacesPanel.new()
-	_places.place_chosen.connect(_on_place_chosen)
-	_places.became_active.connect(_on_places_active)
-	_places.mounts_changed.connect(_on_mounts_changed)
-	_pane_row.add_child(_places)
 
 	# BOTH PANES ARE BUILT NOW AND THE SECOND IS HIDDEN. Building it on demand
 	# would mean the first split of a session pays a listing, a layout pass and
@@ -191,17 +217,29 @@ func _ready() -> void:
 
 	# The status line: what the last operation actually did. Above the hints
 	# rather than in them, because it is a sentence and they are a legend.
+	var footer := PanelContainer.new()
+	var footer_box := TvTheme.card_idle_box()
+	footer_box.set_corner_radius_all(0)
+	footer.add_theme_stylebox_override("panel", footer_box)
+	layout.add_child(footer)
+	_footer_pad = MarginContainer.new()
+	footer.add_child(_footer_pad)
+	var footer_column := VBoxContainer.new()
+	footer_column.add_theme_constant_override("separation", 12)
+	_footer_pad.add_child(footer_column)
 	_status = Label.new()
 	_status.add_theme_font_size_override("font_size", TvTheme.SIZE_BODY)
 	_status.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
-	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(_status)
+	_status.visible = false
+	footer_column.add_child(_status)
 
-	_hints = HBoxContainer.new()
+	_hints = HFlowContainer.new()
 	_hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hints.add_theme_constant_override("separation", TvTheme.HINT_GAP)
-	column.add_child(_hints)
+	_hints.add_theme_constant_override("h_separation", TvTheme.HINT_GAP)
+	_hints.add_theme_constant_override("v_separation", 12)
+	footer_column.add_child(_hints)
 
 	_wire_regions()
 
@@ -222,6 +260,8 @@ func _ready() -> void:
 	_set_active(0)
 	_panes[0].grab_pane_focus()
 	_refresh_chrome()
+	resized.connect(_fit_files)
+	_fit_files()
 
 	Media.state_changed.connect(_on_media_state_changed)
 	# DEAF WHILE A LAUNCH IS UP, the stores screen's rule and now this screen's
@@ -235,6 +275,63 @@ func _ready() -> void:
 	Launcher.minimized.connect(_on_launch_finished)
 
 	ShellLog.info("files screen up at %s" % home)
+
+
+func _search_folder() -> void:
+	_restore_cursor()
+	_return_focus_name = _pane().focused_name()
+	_open_keyboard("search", "Search trash bin" if _pane().path == FileTrash.LOCATION else "Search this folder", _pane().search_text)
+
+
+func _restore_cursor() -> void:
+	if _pane().has_focus_inside():
+		return
+	if is_instance_valid(_pane_cursor) and _pane().is_ancestor_of(_pane_cursor):
+		_pane_cursor.grab_focus()
+	else:
+		_pane().grab_pane_focus()
+
+
+func _show_places() -> void:
+	_places_from_back = false
+	_places_open = _compact
+	_fit_files()
+	_places.grab_places_focus()
+
+
+func _fit_files() -> void:
+	if _content == null:
+		return
+	var unit := TvTheme.layout_unit(size)
+	var was_compact := _compact
+	_compact = size.x < 1100
+	var owner := get_viewport().gui_get_focus_owner()
+	if not was_compact and _compact:
+		_places_open = _places.has_focus_inside()
+	_places.visible = not _compact or _places_open
+	_content.visible = not (_compact and _places_open)
+	_places.custom_minimum_size.x = size.x if _compact else clampf(size.x * 0.23, 280, 40 * unit)
+	_places_button.visible = _compact
+	for edge in ["left", "right", "top", "bottom"]:
+		var inset := maxi(20, roundi(size.x * 0.05)) if edge in ["left", "right"] else maxi(20, roundi(size.y * 0.05))
+		_content.add_theme_constant_override("margin_" + edge, inset if edge != "left" or _compact else maxi(20, roundi(3.2 * unit)))
+		_footer_pad.add_theme_constant_override("margin_" + edge, inset if edge in ["left", "right"] else maxi(16, roundi(2.4 * unit)))
+	# A compact split keeps both locations, showing the active pane at full width.
+	for i in _panes.size():
+		_panes[i].visible = (i == _active if _compact and _split else i == 0 or _split)
+	if is_instance_valid(owner) and not owner.is_visible_in_tree() and not _modal_open():
+		_pane().grab_pane_focus()
+	_wire_places_button()
+
+
+func _wire_places_button() -> void:
+	for edge in ["left", "right", "top"]:
+		_places_button.set("focus_neighbor_" + edge, _places_button.get_path_to(_places_button))
+	var target: Control = _pane()._crumbs.back() if not _pane()._crumbs.is_empty() else _places_button
+	_places_button.focus_neighbor_bottom = _places_button.get_path_to(target)
+	for pane in _panes:
+		for crumb in pane._crumbs:
+			crumb.focus_neighbor_top = crumb.get_path_to(_places_button if _compact else crumb)
 
 
 func _on_launch_started(_entry: Dictionary) -> void:
@@ -268,6 +365,7 @@ func _wire_regions() -> void:
 	# screen, and this is the one place that knows.
 	for pane in _panes:
 		pane.set_narrow(_split)
+	_wire_places_button()
 
 
 ## LEFT AND RIGHT BETWEEN REGIONS, handled here rather than by a stored
@@ -303,7 +401,7 @@ func _cross_region(going_right: bool) -> bool:
 	if _split and _active == 1:
 		_focus_pane(0)
 		return true
-	_places.grab_places_focus()
+	_show_places()
 	return true
 
 
@@ -338,6 +436,7 @@ func _set_active(index: int) -> void:
 	_active = index
 	for i in _panes.size():
 		_panes[i].set_active(_split and i == index)
+	_fit_files()
 	_refresh_chrome()
 
 
@@ -357,7 +456,8 @@ func _on_places_active() -> void:
 ## place this pane is showing -- so backing out of a stick lands on the stick,
 ## not at the top of the list.
 func _on_pane_exit_up() -> void:
-	_places.grab_places_focus()
+	_show_places()
+	_places_from_back = true
 	ShellLog.info("files: out of the pane to Places")
 
 
@@ -374,6 +474,9 @@ func _on_place_chosen(place: Dictionary) -> void:
 	if pane == _panes[1]:
 		_pane_two_touched = true
 	_status.text = ""
+	_places_open = false
+	_places_from_back = false
+	_fit_files()
 	pane.grab_pane_focus()
 
 
@@ -432,14 +535,16 @@ func _refresh_chrome() -> void:
 	if _heading == null:
 		return
 
+	_heading.text = picker_title if picker_mode else ("Trash bin" if _pane().path == FileTrash.LOCATION else "Files")
 	var selected := _pane().selection_count()
-	if selected > 0:
-		_heading.text = "%s  --  %d selected" % [picker_title if picker_mode else "Files", selected]
-	else:
-		_heading.text = picker_title if picker_mode else "Files"
-	if not _pane().search_text.is_empty():
-		_heading.text += "  --  " + _pane().search_text
-
+	_selection.text = "%d selected" % selected if selected > 0 else ""
+	_selection.visible = selected > 0
+	_places.set_location(_pane().path)
+	var owner := get_viewport().gui_get_focus_owner()
+	if owner != null and _pane().is_ancestor_of(owner):
+		_pane_cursor = owner
+	_wire_places_button()
+	_status.visible = not _status.text.is_empty()
 	_refresh_hints()
 
 
@@ -456,38 +561,43 @@ func _refresh_hints() -> void:
 	if _transfer != null:
 		_hints.add_child(TvTheme.hint("B", "Cancel move" if _transfer_cut else "Cancel copy"))
 		return
+	var owner := get_viewport().gui_get_focus_owner()
+	if owner == _places_button:
+		_hints.add_child(TvTheme.hint("A", "Places"))
+		_hints.add_child(TvTheme.hint("Y", "Search"))
+		_hints.add_child(TvTheme.hint("OPTIONS", "Actions"))
+		_hints.add_child(TvTheme.hint("B", "Back"))
+		return
 
 	if _places.has_focus_inside():
 		_hints.add_child(TvTheme.hint("A", "Open"))
 		if bool(_places.focused_place().get("removable", false)):
 			_hints.add_child(TvTheme.hint("OPTIONS", "Eject"))
+		elif str(_places.focused_place().get("path", "")) == FileTrash.LOCATION:
+			_hints.add_child(TvTheme.hint("OPTIONS", "Actions"))
 		_hints.add_child(TvTheme.hint("B", "Back"))
 		return
 
 	var pane := _pane()
 	var entry := pane.focused_entry()
 	if not entry.is_empty():
-		if bool(entry.get("is_dir", false)):
+		if pane.path == FileTrash.LOCATION:
+			_hints.add_child(TvTheme.hint("A", "Restore"))
+		elif bool(entry.get("is_dir", false)):
 			_hints.add_child(TvTheme.hint("A", "Open"))
 		else:
-			# What A will actually do to THIS file, from the same function the
-			# press goes through -- so the caption and the behaviour can never
-			# disagree about whether the handler is installed.
-			var plan := FileOpen.plan(str(entry.get("name", "")))
-			var caption := str(plan["detail"])
-			if str(plan["action"]) == "none":
-				caption = "Cannot open"
+			var caption := "Open"
 			if picker_mode:
 				caption = "Select" if picker_multiple else "Choose file"
 			_hints.add_child(TvTheme.hint("A", caption))
 		_hints.add_child(TvTheme.hint("X",
 			"Deselect" if _focused_is_selected(pane) else "Select"))
 
-	_hints.add_child(TvTheme.hint("Y", "View"))
+	_hints.add_child(TvTheme.hint("Y", "Search"))
 	_hints.add_child(TvTheme.hint("OPTIONS", "Actions"))
 	if _split:
 		_hints.add_child(TvTheme.hint("L1/R1", "Other pane"))
-	_hints.add_child(TvTheme.hint("B", "Up"))
+	_hints.add_child(TvTheme.hint("B", "Back"))
 
 
 func _focused_is_selected(pane: FilePane) -> bool:
@@ -539,19 +649,24 @@ func _input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if _modal_open():
 		return
+	var focus := get_viewport().gui_get_focus_owner()
 
 	if InputMap.has_action("ui_shell_options") and event.is_action_pressed("ui_shell_options"):
 		get_viewport().set_input_as_handled()
+		if focus == _places_button:
+			_restore_cursor()
 		_open_actions_menu()
 		return
 
 	if InputMap.has_action("ui_shell_y") and event.is_action_pressed("ui_shell_y"):
+		if _places.has_focus_inside():
+			return
 		get_viewport().set_input_as_handled()
-		_open_view_menu()
+		_search_folder()
 		return
 
 	if InputMap.has_action("ui_shell_x") and event.is_action_pressed("ui_shell_x"):
-		if _places.has_focus_inside():
+		if _places.has_focus_inside() or focus == _places_button:
 			return
 		get_viewport().set_input_as_handled()
 		var pane := _pane()
@@ -585,11 +700,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 	if _places.has_focus_inside():
+		if _compact and not _places_from_back:
+			_places_open = false
+			_fit_files()
+			_pane().grab_pane_focus()
+			return
 		ShellLog.info("files: closed by B at Places")
 		if picker_mode:
 			_finish_picker(PackedStringArray())
 		else:
 			closed.emit()
+		return
+	if focus == _places_button:
+		_restore_cursor()
 		return
 	_status.text = ""
 	_pane().go_up()
@@ -597,10 +720,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _modal_open() -> bool:
 	return _menu != null or _keyboard != null or _viewer != null or _properties != null \
-		or _browser != null or _installer != null or _transfer != null
+		or _browser != null or _installer != null or _downloads != null or _transfer != null
 
 
 func _focus_pane(index: int) -> void:
+	_places_open = false
+	_places_from_back = false
 	if index == _active and _pane().has_focus_inside():
 		return
 	_set_active(index)
@@ -613,6 +738,9 @@ func _focus_pane(index: int) -> void:
 
 ## A on an item. Four outcomes and the plan decides which -- see file_open.gd.
 func _on_item_activated(entry: Dictionary, pane: FilePane) -> void:
+	if pane.path == FileTrash.LOCATION:
+		_restore_trash_entries([entry])
+		return
 	if bool(entry.get("is_dir", false)):
 		_status.text = ""
 		if not pane.show_directory(str(entry["path"])):
@@ -640,6 +768,8 @@ func _on_item_activated(entry: Dictionary, pane: FilePane) -> void:
 			_open_browser(pane, str(entry["path"]), file_name)
 		"installer":
 			_open_installer(str(entry["path"]), file_name)
+		"torrent":
+			_open_downloads(str(entry["path"]))
 		_:
 			# Only "none" lands here: nothing on this machine draws or manages
 			# this format, said in terms of THIS file.
@@ -650,6 +780,23 @@ func _on_item_activated(entry: Dictionary, pane: FilePane) -> void:
 ## the top-bar Install action, with the chosen path carried in as its initial
 ## focus. It is a child for the same lifetime reason as the image viewer and
 ## document browser: closing it reveals the exact file-list state underneath.
+func _open_downloads(path: String) -> void:
+	if _downloads != null: return
+	_downloads = load("res://src/downloads_screen.gd").new()
+	_downloads.initial_torrent = path
+	_return_focus_name = path.get_file()
+	_downloads.closed.connect(func(): _close_downloads.call_deferred())
+	add_child(_downloads)
+	set_process_unhandled_input(false)
+
+func _close_downloads() -> void:
+	if _downloads == null: return
+	remove_child(_downloads)
+	_downloads.queue_free()
+	_downloads = null
+	set_process_unhandled_input(true)
+	_pane().grab_pane_focus(_return_focus_name)
+
 func _open_installer(path: String, file_name: String) -> void:
 	if _installer != null:
 		return
@@ -761,16 +908,14 @@ func _close_viewer() -> void:
 
 
 # ---------------------------------------------------------------------------
-# The view menu (Y)
+# View settings in the Options menu
 # ---------------------------------------------------------------------------
 
 ## Dolphin's View menu, as one screen of rows. Every entry states its CURRENT
 ## value in its label -- "Sort by: Size" rather than "Sort by" -- because a
 ## menu that only says what it will change is a menu you have to open twice to
 ## find out where you are.
-func _open_view_menu() -> void:
-	if _modal_open():
-		return
+func _view_options() -> Array:
 	var pane := _pane()
 	var items := [
 		{"id": "search", "label": "Search this folder", "icon": "search"},
@@ -795,10 +940,7 @@ func _open_view_menu() -> void:
 			"label": "Clear selection" if pane.selection_count() > 0 else "Select all",
 			"icon": "check"})
 
-	_menu_targets = []
-	_menu_place = {}
-	_return_focus_name = pane.focused_name()
-	_open_menu(items, "View", "")
+	return items
 
 
 func _mode_label(mode: String) -> String:
@@ -881,6 +1023,9 @@ func _open_actions_menu() -> void:
 			{"id": "pick", "label": "Choose selected files" if picker_multiple else "Choose file", "icon": "check"},
 			{"id": "pickcancel", "label": "Cancel", "icon": "close"}], picker_title, "")
 		return
+	if (_places.has_focus_inside() and str(_places.focused_place().get("path", "")) == FileTrash.LOCATION) or (not _places.has_focus_inside() and _pane().path == FileTrash.LOCATION):
+		_open_trash_actions()
+		return
 
 	# On the Places column OPTIONS is about the PLACE, and a drive has exactly
 	# one verb: taking it out without losing what was just written to it. Home
@@ -939,10 +1084,11 @@ func _open_actions_menu() -> void:
 	# what the cursor is on -- which is why it is last, and why an empty folder
 	# has a menu at all.
 	items.append({"id": "newfolder", "label": "New folder", "icon": "folder"})
-	items.append({"id": "trash", "label": "Restore from wastebasket", "icon": "trash"})
+	items.append({"id": "opentrash", "label": "Open trash bin", "icon": "trash"})
 
 	if targets.size() == 1:
 		items.append({"id": "properties", "label": "Properties", "icon": "more"})
+	items.append_array(_view_options())
 
 	_menu_place = {}
 	_menu_targets = targets
@@ -987,11 +1133,19 @@ func _open_menu(items: Array, title: String, note: String) -> void:
 func _on_menu_chosen(id: String) -> void:
 	var pane := _pane()
 	if id.begins_with("restore:"):
-		var result := FileTrash.restore(id.trim_prefix("restore:"))
-		_say(str(result.get("message", "")), not bool(result.get("ok", false)))
-		pane.refresh()
+		_restore_trash_entries([{"trash_id": id.trim_prefix("restore:")}])
 		return
 	match id:
+		"restoretrash":
+			_restore_trash_entries(_menu_targets)
+		"emptytrash":
+			_next_menu = "emptytrash"
+		"emptytrashconfirmed":
+			var result := FileTrash.empty()
+			_refresh_trash()
+			_say(str(result["message"]), not bool(result["ok"]))
+		"cancel":
+			pass
 		"pick":
 			_choose_picker_entries(_menu_targets)
 		"pickcancel":
@@ -1010,7 +1164,7 @@ func _on_menu_chosen(id: String) -> void:
 		"historyforward":
 			if not pane.history_move(1):
 				_say("No next folder")
-		"trash":
+		"opentrash":
 			_open_trash.call_deferred()
 		"mode":
 			_cycle_mode(pane)
@@ -1052,6 +1206,9 @@ func _on_menu_chosen(id: String) -> void:
 
 func _on_menu_closed() -> void:
 	_close_menu.call_deferred()
+	if _next_menu == "emptytrash":
+		_confirm_empty_trash.call_deferred()
+	_next_menu = ""
 
 
 func _close_menu() -> void:
@@ -1400,6 +1557,7 @@ func _delete_targets() -> void:
 		_say("Moved %d items to the wastebasket" % done)
 
 	_refresh_panes_showing(where, "")
+	_refresh_trash()
 
 
 # ---------------------------------------------------------------------------
@@ -1481,6 +1639,8 @@ func _refresh_panes_showing(dir_path: String, focus_name: String) -> void:
 	if dir_path.is_empty():
 		_refresh_chrome()
 		return
+	var active := _active
+	var owner := get_viewport().gui_get_focus_owner()
 	for pane in _panes:
 		if pane.path != dir_path:
 			continue
@@ -1488,7 +1648,10 @@ func _refresh_panes_showing(dir_path: String, focus_name: String) -> void:
 		# redraws in place and keeps its own cursor, which is what makes a
 		# paste into the far side of a split view not steal the selection you
 		# were building on this side.
-		pane.refresh(focus_name if pane == _pane() else "")
+		pane.refresh(focus_name if pane == _panes[active] else "")
+	_set_active(active)
+	if is_instance_valid(owner) and owner.is_visible_in_tree():
+		owner.grab_focus()
 	_refresh_chrome()
 
 
@@ -1498,6 +1661,7 @@ func _refresh_panes_showing(dir_path: String, focus_name: String) -> void:
 func _say(text: String, alert: bool = false) -> void:
 	if _status != null:
 		_status.text = text
+		_status.visible = not text.is_empty()
 		_status.add_theme_color_override("font_color",
 			TvTheme.TEXT_ALERT if alert else TvTheme.TEXT_SECONDARY)
 	ShellLog.info("files: %s" % text)
@@ -1529,10 +1693,61 @@ func _finish_picker(paths: PackedStringArray) -> void:
 
 func _open_trash() -> void:
 	_close_menu()
+	_on_place_chosen({"name": "Trash bin", "path": FileTrash.LOCATION,
+		"root": FileTrash.LOCATION, "root_label": "Trash bin"})
+
+
+func _open_trash_actions() -> void:
 	var items: Array = []
-	for entry in FileTrash.entries():
-		items.append({"id": "restore:" + str(entry["id"]), "label": str(entry["name"]), "icon": "trash"})
-	if items.is_empty():
-		_say("Wastebasket is empty")
+	_menu_place = _places.focused_place() if _places.has_focus_inside() else {}
+	_menu_targets = [] if not _menu_place.is_empty() else _pane().target_entries()
+	_return_focus_name = _pane().focused_name()
+	if not _menu_place.is_empty():
+		items.append({"id": "opentrash", "label": "Open trash bin", "icon": "trash"})
+	elif not _menu_targets.is_empty():
+		items.append({"id": "restoretrash", "label": _count_label("Restore", _menu_targets), "icon": "folder-open"})
+	if FileTrash.has_contents():
+		items.append({"id": "emptytrash", "label": "Empty trash bin", "icon": "trash"})
+	if _menu_place.is_empty():
+		for option in _view_options():
+			if str(option["id"]) in ["refresh", "mode", "sort", "order", "split", "clearsearch", "selectall"]:
+				items.append(option)
+	_open_menu(items, "Trash bin", "Restore returns items to their original folders.")
+
+
+func _confirm_empty_trash() -> void:
+	if not FileTrash.has_contents():
+		_say("Trash bin is empty")
 		return
-	_open_menu(items, "Restore from wastebasket", "Choose a file to restore to its original folder.")
+	_open_menu([
+		{"id": "cancel", "label": "Cancel", "icon": "close"},
+		{"id": "emptytrashconfirmed", "label": "Empty trash bin", "icon": "trash"}],
+		"Empty trash bin?", "Permanently delete everything in the trash bin. This cannot be undone.")
+
+
+func _restore_trash_entries(entries: Array) -> void:
+	var restored := 0
+	var first_error := ""
+	for entry in entries:
+		var result := FileTrash.restore(str(entry.get("trash_id", "")))
+		if bool(result.get("ok", false)):
+			restored += 1
+			_refresh_panes_showing(str(result["path"]).get_base_dir(), str(result["path"]).get_file())
+		elif first_error.is_empty():
+			first_error = str(result["message"])
+	_refresh_trash()
+	_say(first_error if not first_error.is_empty() else "Restored %d item%s" % [restored, "" if restored == 1 else "s"], not first_error.is_empty())
+
+
+func _refresh_trash() -> void:
+	var active := _active
+	var owner := get_viewport().gui_get_focus_owner()
+	for pane in _panes:
+		if pane.path == FileTrash.LOCATION:
+			pane.refresh()
+	_places.refresh_trash()
+	_set_active(active)
+	if is_instance_valid(owner) and owner.is_visible_in_tree():
+		owner.grab_focus()
+	elif not _modal_open() and _pane().path == FileTrash.LOCATION:
+		_pane().grab_pane_focus()

@@ -56,7 +56,10 @@ static func font() -> Font:
 const CODEPOINTS := {
 	# The shell's existing marks
 	"store": 0xe470,        # storefront
+	"steam": 0xead4,        # steam-logo
+	"speaker": 0xe44a,      # speaker-high
 	"gear": 0xe270,
+	"user": 0xe4c2,        # user
 	# The processes pill at the bar's left corner (process_pill.gd): layers,
 	# i.e. things running underneath what is on screen. It replaced the
 	# notification bell that used to sit there (0xe0ce, dropped with the menu
@@ -70,7 +73,13 @@ const CODEPOINTS := {
 	# already declared below -- was rendered in the same pass as a control, so
 	# the sweep's numbering is known to line up with this table.
 	"stack": 0xe466,
-	"browser": 0xe0f4,
+	"browser": 0xe288,     # globe
+	"globe": 0xe288,
+	"bookmark": 0xe0e8,
+	"search": 0xe30c,
+	"youtube": 0xe4fc,
+	"github": 0xe576,
+	"puzzle": 0xe596,
 	"wifi": 0xe4ea,         # wifi-high
 	"wifi-off": 0xe4f2,     # wifi-slash
 	"close": 0xe4f6,        # x

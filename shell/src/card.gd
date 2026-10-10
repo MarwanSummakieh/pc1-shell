@@ -41,12 +41,17 @@ signal details_requested()
 const SOURCES := {
 	"steam.": "Steam",
 	"win.": "Windows",
+	"managed.": "Windows",
 	"epic.": "Epic",
 	"gog.": "GOG",
 	"rom.": "Emulated",
 }
 
 var entry: Dictionary = {}
+var layout_unit := 10.8
+var _focus_frame: Panel
+static var _texture_cache: Dictionary = {}
+var _art_signature := ""
 
 var _icon_rect: TextureRect = null
 var _title_label: Label = null
@@ -65,7 +70,7 @@ func _ready() -> void:
 	# _get_minimum_size virtual on Button, so a Button whose children are
 	# anchored lays out zero-wide and the whole rail collapses into a point.
 	# This repo has paid for that lesson once already.
-	custom_minimum_size = Vector2(TvTheme.CARD_SIZE, TvTheme.CARD_SIZE)
+	custom_minimum_size = Vector2(TvTheme.CARD_SIZE * TvTheme.CARD_ASPECT_RATIO, TvTheme.CARD_SIZE)
 
 	# Paint the accent in the rounded button itself. A full-size ColorRect
 	# child covers the rounded corners and hides the pressed background.
@@ -75,7 +80,7 @@ func _ready() -> void:
 	add_theme_stylebox_override("hover", surface)
 	add_theme_stylebox_override("pressed", TvTheme.card_art_box(
 		accent.lerp(TvTheme.SURFACE_PRESSED, 0.35)))
-	add_theme_stylebox_override("focus", TvTheme.card_focus_ring())
+	add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
 	_build_contents()
 
@@ -84,23 +89,38 @@ func _ready() -> void:
 
 
 func _build_contents() -> void:
+	# A rounded alpha mask clips the actual artwork, not only its background.
+	var art_clip := Panel.new()
+	art_clip.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	art_clip.add_theme_stylebox_override("panel", TvTheme.card_art_box(Color.WHITE))
+	art_clip.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
+	art_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(art_clip)
 	_icon_rect = TextureRect.new()
 	_icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_icon_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_icon_rect.offset_left = TvTheme.CARD_ICON_INSET
 	_icon_rect.offset_top = TvTheme.CARD_ICON_INSET
 	_icon_rect.offset_right = -TvTheme.CARD_ICON_INSET
 	_icon_rect.offset_bottom = -TvTheme.CARD_ICON_INSET
 	_icon_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_icon_rect)
+	art_clip.add_child(_icon_rect)
 	_load_icon()
+	_focus_frame = Panel.new()
+	_focus_frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_focus_frame.add_theme_stylebox_override("panel", TvTheme.card_focus_ring())
+	_focus_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_focus_frame.hide()
+	add_child(_focus_frame)
+	focus_exited.connect(func(): _focus_frame.hide())
 
 	# The caption block sits UNDER the card rather than inside it, so a long
 	# title cannot eat the artwork. Anchored to the bottom edge and allowed to
 	# overflow downward; the rail reserves room for it.
 	var caption := VBoxContainer.new()
 	caption.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	caption.visible = not is_installed()
 	caption.offset_top = 8
 	caption.offset_bottom = 88
 	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -129,19 +149,34 @@ func _build_contents() -> void:
 	if not is_installed():
 		_source_label.text = str(entry.get("subtitle", ""))
 		_source_label.visible = not _source_label.text.is_empty()
-		modulate.a = 0.55
+		modulate.a = 1.0
 
 
 func _load_icon() -> void:
-	var path := str(entry.get("icon", ""))
-	if path.is_empty():
+	_art_signature = _entry_art_signature(entry)
+	_icon_rect.texture = null
+	var paths: Array = []
+	var assets: Dictionary = entry.get("metadata", {}).get("assets", {})
+	for kind in ["cover", "header"]:
+		paths.append(str(assets.get(kind, {}).get("path", "")))
+	paths.append(str(entry.get("cover", "")))
+	paths.append(str(entry.get("icon", "")))
+	for path: String in paths:
+		if path.is_empty():
+			continue
+		var key := path + ":" + str(FileAccess.get_modified_time(path))
+		if not _texture_cache.has(key):
+			var image := Icons.load_icon_image(path)
+			if image == null:
+				continue
+			var ratio := minf(1, 512.0 / maxi(image.get_width(), image.get_height()))
+			if ratio < 1:
+				image.resize(maxi(1, roundi(image.get_width() * ratio)), maxi(1, roundi(image.get_height() * ratio)))
+			if _texture_cache.size() >= 32:
+				_texture_cache.erase(_texture_cache.keys()[0])
+			_texture_cache[key] = ImageTexture.create_from_image(image)
+		_icon_rect.texture = _texture_cache[key]
 		return
-	var image := Icons.load_icon_image(path)
-	if image == null:
-		# Not a warning: an entry with no usable picture is a normal card with
-		# an accent wash and a name on it, which is what the wash is for.
-		return
-	_icon_rect.texture = ImageTexture.create_from_image(image)
 
 
 ## What to call this entry's source on screen, or empty for an application.
@@ -165,6 +200,9 @@ func is_installed() -> bool:
 ## Start this entry, or say why not. Called by the rail on A and by anything
 ## else that wants this card's press without simulating an input event.
 func activate() -> void:
+	if entry.has("setup_id"):
+		WindowsInstall.open_selection(entry)
+		return
 	if not is_installed():
 		ShellLog.info("card %s is not installed yet; nothing to launch"
 			% str(entry.get("id", "")))
@@ -176,11 +214,12 @@ func activate() -> void:
 ## rail's HBox lays the neighbours out around it instead of letting a scaled
 ## card overlap them.
 func set_selected_size(is_selected: bool) -> void:
-	var side := TvTheme.CARD_FOCUSED_SIZE if is_selected else TvTheme.CARD_SIZE
-	custom_minimum_size = Vector2(side, side)
+	var side := layout_unit * (19.0 if is_selected else 15.5) * TvTheme.CARD_SCALE
+	custom_minimum_size = Vector2(side * TvTheme.CARD_ASPECT_RATIO, side)
 
 
 func _on_focus_entered() -> void:
+	_focus_frame.show()
 	selected.emit(entry)
 
 
@@ -189,12 +228,29 @@ func _on_pressed() -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	# DOWN on a focused card asks for its details rather than moving focus --
-	# there is nothing below the rail to move to. Kept as a signal rather than
-	# acted on here so the rail owns what "details" means; today nothing listens
-	# and the press is simply consumed, which is honest: a card that silently
-	# did nothing on Down would be indistinguishable from one that moved focus
-	# somewhere invisible.
+	# Down enters the selected game's Home actions without replacing its artwork.
 	if event.is_action_pressed("ui_down"):
 		accept_event()
 		details_requested.emit()
+
+func refresh_entry(new_entry: Dictionary) -> void:
+	var art_changed := _art_signature != _entry_art_signature(new_entry)
+	entry = new_entry
+	_title_label.text = str(entry.get("title", ""))
+	_source_label.text = source_name() if is_installed() else str(entry.get("subtitle", ""))
+	_source_label.visible = not _source_label.text.is_empty()
+	_title_label.get_parent().visible = not is_installed()
+	modulate.a = 1.0
+	if art_changed:
+		_load_icon()
+
+static func _entry_art_signature(value: Dictionary) -> String:
+	var signature := ""
+	var assets: Dictionary = value.get("metadata", {}).get("assets", {})
+	for kind in ["header", "cover"]:
+		var path := str(assets.get(kind, {}).get("path", ""))
+		signature += path + ":" + str(FileAccess.get_modified_time(path) if not path.is_empty() else 0) + "\n"
+	for kind in ["cover", "icon"]:
+		var path := str(value.get(kind, ""))
+		signature += path + ":" + str(FileAccess.get_modified_time(path) if not path.is_empty() else 0) + "\n"
+	return signature

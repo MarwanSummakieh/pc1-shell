@@ -81,9 +81,11 @@ func _refresh() -> void:
 	var active := WindowsInstall.available and WindowsInstall.ACTIVE.has(str(state.get("status", "")))
 	_status.text = "Choose a Windows installer in Files, or select one below."
 	if not source_path.is_empty():
-		_status.text = "Run the setup wizard, then choose the installed program for your library."
+		_status.text = "Complete setup to add the program to your library automatically."
 		if not selected_job.is_empty():
 			_status.text = str(selected_job.get("detail", ""))
+			if selected_job.get("status") == "select":
+				_status.text = "Choose the program to play. Adding it as a game enables native controller input."
 			if str(selected_job.get("status", "")) in ["preparing", "installing"] and not Launcher.is_busy():
 				_status.text = "Setup was interrupted. Run the installer again."
 	elif active or str(state.get("status", "")) in ["failed", "done", "cancelled"]:
@@ -123,6 +125,8 @@ func _refresh() -> void:
 					_add_row("discard." + str(job.get("id", "")), "Remove setup files",
 						str(job.get("source", "")).get_file(), WindowsInstall.confirm_discard.bind(job))
 		for entry in library:
+			if entry.has("setup_id"):
+				continue
 			_add_row("remove." + str(entry.get("id", "")), "Remove " + str(entry.get("title", "")),
 				"Windows app", WindowsInstall.confirm_remove.bind(entry))
 		for source in candidates:
@@ -147,7 +151,7 @@ func _refresh() -> void:
 				WindowsInstall.local_install.bind(source_path, true))
 	if active:
 		_add_row("cancel", "Cancel automatic installation", "Stops the background installation", WindowsInstall.cancel)
-	_add_row("back", "Back to Files" if not source_path.is_empty() else "Back to library", "", _back)
+	_add_row("back", "Back", "", _back)
 	TvTheme.wire_column(_rows)
 	if not is_visible_in_tree() or Launcher.is_busy() or (is_instance_valid(WindowsInstall._guided_screen) and WindowsInstall._guided_screen.visible):
 		return
@@ -164,8 +168,10 @@ func _add_choices(job: Dictionary) -> void:
 	for choice in job.get("choices", []):
 		var key := str(job.get("id", ""))
 		var choice_id := str(choice.get("id", ""))
-		_add_row(key + "." + choice_id, "Add " + str(choice.get("title", "")) + " to library",
-			str(choice.get("detail", "")), WindowsInstall.register_local.bind(key, choice_id))
+		_add_row(key + "." + choice_id + ".game", "Add " + str(choice.get("title", "")) + " as game",
+			"Native controller input", WindowsInstall.register_local.bind(key, choice_id, "gamepad"))
+		_add_row(key + "." + choice_id + ".app", "Add " + str(choice.get("title", "")) + " as app",
+			"Controller pointer", WindowsInstall.register_local.bind(key, choice_id, "pointer"))
 
 
 func _add_source_row(source: Dictionary) -> void:

@@ -1,12 +1,13 @@
 extends Control
 
 ## Shared controller keyboard. Draft inputs stay local until Done; browser inputs
-## emit edits immediately and leave the real field visible beside this panel.
+## emit edits immediately into the focused field beneath this floating panel.
 signal submitted(text: String)
 signal cancelled()
 signal text_inserted(text: String)
 signal editing_key(key: String)
 signal panel_moved(rect: Rect2)
+signal window_move_requested(amount: Vector2)
 
 const TvTheme = preload("res://src/tv_theme.gd")
 const PANEL_WIDTH := 568
@@ -22,7 +23,6 @@ const ROWS_LOWER := [
 	["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
 	["a", "s", "d", "f", "g", "h", "j", "k", "l", "-"],
 	["z", "x", "c", "v", "b", "n", "m", ".", "_", "@"],
-	["!", "#", "$", "%", "&", "*", "+", "=", "?", "/"],
 ]
 
 const ROWS_UPPER := [
@@ -30,7 +30,13 @@ const ROWS_UPPER := [
 	["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
 	["A", "S", "D", "F", "G", "H", "J", "K", "L", "-"],
 	["Z", "X", "C", "V", "B", "N", "M", ".", "_", "@"],
-	["~", "(", ")", "[", "]", "{", "}", "<", ">", "\\"],
+]
+
+const ROWS_SYMBOLS := [
+	["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+	["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"],
+	["-", "_", "+", "=", "[", "]", "{", "}", ":", ";"],
+	["/", "\\", "|", "~", "`", "<", ">", "\"", "'", "?"],
 ]
 
 
@@ -41,9 +47,11 @@ var background_alpha := 0.0
 var input_context := "text"
 var live_input := false
 var done_label := "Done"
+var floating_window := false
 var _text := ""
 var _caret := 0
 var _shift := false
+var _symbols := false
 var _keys: Array = []
 var _flat: Array = []
 var _entry: Label
@@ -51,10 +59,14 @@ var _panel: PanelContainer
 var _left_trigger := false
 var _right_trigger := false
 var _move_axis := Vector2.ZERO
-var _saved_position := Vector2.ONE
+var _saved_position := Vector2(0.5, 1.0)
+var _dragging := false
+var _shift_key: Button
+var _symbols_key: Button
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if PlayerOne.device >= 0:
 		_left_trigger = PlayerOne.axis(JOY_AXIS_TRIGGER_LEFT) > 0.6
 		_right_trigger = PlayerOne.axis(JOY_AXIS_TRIGGER_RIGHT) > 0.6
@@ -73,6 +85,9 @@ func _ready() -> void:
 	surface.set_corner_radius_all(8)
 	surface.set_border_width_all(1)
 	surface.border_color = Color(TvTheme.TEXT_SECONDARY, 0.35)
+	surface.shadow_color = Color(0, 0, 0, 0.28)
+	surface.shadow_size = 18
+	surface.shadow_offset = Vector2(0, 6)
 	_panel.add_theme_stylebox_override("panel", surface)
 	var pad := MarginContainer.new()
 	for edge in ["left", "right", "top", "bottom"]:
@@ -81,34 +96,58 @@ func _ready() -> void:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 8)
 	pad.add_child(column)
+	var header := HBoxContainer.new()
+	header.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	header.gui_input.connect(_drag_panel)
+	column.add_child(header)
 	var title := Label.new()
 	title.text = title_text
-	title.add_theme_font_size_override("font_size", 26)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.add_theme_font_size_override("font_size", 22)
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	column.add_child(title)
+	header.add_child(title)
+	var close := _make_key("×")
+	close.custom_minimum_size = Vector2(44, 44)
+	close.size_flags_horizontal = Control.SIZE_SHRINK_END
+	close.focus_mode = Control.FOCUS_NONE
+	close.tooltip_text = "Close keyboard" if live_input else "Cancel"
+	close.pressed.connect(func(): cancelled.emit())
+	header.add_child(close)
 	_entry = Label.new()
 	_entry.add_theme_font_size_override("font_size", 24)
-	_entry.custom_minimum_size.y = 32
+	_entry.custom_minimum_size.y = 42
 	_entry.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_entry.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	column.add_child(_entry)
+	_entry.visible = not live_input
+	var entry_box := TvTheme.card_idle_box()
+	entry_box.bg_color = TvTheme.SURFACE
+	entry_box.content_margin_left = 12
+	entry_box.content_margin_right = 12
+	_entry.add_theme_stylebox_override("normal", entry_box)
 	column.add_child(_build_grid())
 	var hints := Label.new()
-	hints.text = "Cross: type   Square: delete   Triangle: space\nL2: shift   L1 / R1: cursor   R2 / Options: %s\nCircle: %s   Right stick: move" % [done_label.to_lower(), "close" if live_input else "cancel"]
-	if input_context in ["numeric", "decimal", "tel", "number"]:
-		hints.text = "Cross: type   Square: delete\nTriangle: space   L1 / R1: cursor\nR2 / Options: %s   Circle: %s\nRight stick: move" % [done_label.to_lower(), "close" if live_input else "cancel"]
-	hints.add_theme_font_size_override("font_size", 18)
+	hints.text = "□ Delete   △ Space   R Move   ○ " + ("Close" if live_input else "Cancel")
+	hints.add_theme_font_size_override("font_size", 16)
+	hints.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hints.add_theme_color_override("font_color", TvTheme.TEXT_SECONDARY)
+	if input_context in ["numeric", "decimal", "tel", "number"]:
+		hints.text = "□ Delete   R Move   ○ " + ("Close" if live_input else "Cancel")
 	column.add_child(hints)
 	_wire_focus_neighbours()
 	_text = initial_text
 	_caret = _text.length()
 	_refresh_entry()
 	var first_row := 0 if input_context in ["numeric", "decimal", "tel", "number"] else 1
-	_keys[first_row][0].grab_focus()
+	if not floating_window:
+		_keys[first_row][0].grab_focus()
 	var config := ConfigFile.new()
 	if config.load(POSITION_FILE) == OK:
-		_saved_position = config.get_value("panel", "position", Vector2.ONE)
+		var saved: Variant = config.get_value("panel", "position", _saved_position)
+		if saved is Vector2 and saved.is_finite():
+			_saved_position = saved
 	get_viewport().size_changed.connect(_restore_position)
 	_restore_position.call_deferred()
 	ShellLog.info("compact keyboard up (%s)" % input_context)
@@ -135,7 +174,7 @@ func _build_grid() -> Control:
 	actions.add_theme_constant_override("separation", KEY_GAP)
 	grid.add_child(actions)
 	var action_keys: Array = []
-	var action_labels: Array = ["Shift", "Space", "Delete", done_label]
+	var action_labels: Array = ["Shift", "?123", "Space", "⌫", done_label]
 	if input_context in ["numeric", "decimal", "tel", "number"]:
 		action_labels = ["Space", "Delete", done_label]
 	for label in action_labels:
@@ -143,33 +182,55 @@ func _build_grid() -> Control:
 		actions.add_child(key)
 		action_keys.append(key)
 		if label == "Shift":
+			_shift_key = key
 			key.pressed.connect(_on_shift)
+		elif label == "?123":
+			_symbols_key = key
+			key.pressed.connect(_on_symbols)
 		elif label == "Space":
+			key.size_flags_stretch_ratio = 3
 			key.pressed.connect(_on_space)
-		elif label == "Delete":
+		elif label in ["Delete", "⌫"]:
+			key.tooltip_text = "Delete"
 			key.pressed.connect(_on_backspace)
 		else:
+			_style_primary(key)
 			key.pressed.connect(_on_done)
 	_keys.append(action_keys)
 	return grid
 
 func _make_key(label: String) -> Button:
 	var key := Button.new()
+	# Text entry should respond to Cross going down, without waiting for release.
+	key.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	key.text = label
 	key.custom_minimum_size = Vector2(KEY_SIZE, KEY_SIZE)
 	key.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	key.add_theme_font_size_override("font_size", 22)
+	key.add_theme_color_override("font_color", TvTheme.TEXT_PRIMARY)
+	key.add_theme_color_override("font_hover_color", TvTheme.TEXT_ON_PRIMARY)
+	key.add_theme_color_override("font_focus_color", TvTheme.TEXT_ON_PRIMARY)
+	key.add_theme_color_override("font_pressed_color", TvTheme.TEXT_PRIMARY)
 	for state in ["normal", "hover", "pressed", "focus"]:
 		var style: StyleBoxFlat = TvTheme.card_idle_box()
-		if state == "hover":
-			style = TvTheme.card_focus_box()
+		style.bg_color = TvTheme.SURFACE
+		if state in ["hover", "focus"]:
+			style.bg_color = TvTheme.PRIMARY
 		elif state == "pressed":
 			style = TvTheme.row_pressed_box()
-		elif state == "focus":
-			style = TvTheme.card_focus_ring()
+		style.content_margin_left = 8
+		style.content_margin_right = 8
+		style.content_margin_top = 4
+		style.content_margin_bottom = 4
 		style.set_corner_radius_all(6)
 		key.add_theme_stylebox_override(state, style)
 	return key
+
+func _style_primary(key: Button) -> void:
+	var style := key.get_theme_stylebox("normal").duplicate() as StyleBoxFlat
+	style.bg_color = TvTheme.PRIMARY
+	key.add_theme_stylebox_override("normal", style)
+	key.add_theme_color_override("font_color", TvTheme.TEXT_ON_PRIMARY)
 
 func _wire_focus_neighbours() -> void:
 	for row_index in _keys.size():
@@ -232,28 +293,41 @@ func _move_caret(direction: int) -> void:
 	_refresh_entry()
 
 func _letter_rows() -> Array:
+	if _symbols:
+		return ROWS_SYMBOLS.duplicate(true)
 	var rows: Array = (ROWS_UPPER if _shift else ROWS_LOWER).duplicate(true)
 	if input_context == "email":
-		rows[4] = ["@", ".com", ".net", "_", "-", "+", "!", "#", "$", "%"]
+		rows[3] = ["z", "x", "c", "v", "b", "n", "m", ".", "@", ".com"]
 	elif input_context == "url":
-		rows[4] = ["/", ":", ".com", ".org", ".net", "?", "=", "&", "-", "_"]
+		rows[3] = ["z", "x", "c", "v", "b", "n", "m", "/", ":", ".com"]
+	if _shift:
+		for index in rows[3].size():
+			rows[3][index] = str(rows[3][index]).to_upper()
 	return rows
 
 func _on_shift() -> void:
-	if _flat.size() != 50:
+	if _flat.size() != 40:
 		return
 	_shift = not _shift
+	_refresh_keys()
+
+func _on_symbols() -> void:
+	_symbols = not _symbols
+	_refresh_keys()
+
+func _refresh_keys() -> void:
 	var rows: Array = _letter_rows()
 	for index in _flat.size():
 		_flat[index].text = rows[index / 10][index % 10]
-	_keys.back()[0].text = "SHIFT" if _shift else "Shift"
+	_shift_key.text = "SHIFT" if _shift else "Shift"
+	_symbols_key.text = "ABC" if _symbols else "?123"
 
 func _on_done() -> void:
 	submitted.emit(_text)
 
 func _refresh_entry() -> void:
 	if live_input:
-		_entry.text = "Typing into the password field" if masked else "Text appears in the page as you type"
+		_entry.text = ""
 		return
 	var value := "*".repeat(_text.length()) if masked else _text
 	var start := maxi(0, _caret - 22)
@@ -265,6 +339,28 @@ func _input(event: InputEvent) -> void:
 	var viewport := get_viewport()
 	if (event is InputEventJoypadButton or event is InputEventJoypadMotion) and PlayerOne.device >= 0 and event.device != PlayerOne.device:
 		return
+	if floating_window:
+		# Input.parse_input_event also visits native child windows. Broker input
+		# forwarded from the main viewport must navigate this window only once.
+		if event.get_meta("marwanos_keyboard_input", false):
+			viewport.set_input_as_handled()
+			return
+		event.set_meta("marwanos_keyboard_input", true)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_dragging = false
+	if event is InputEventMouseMotion and _dragging:
+		move_panel(event.relative)
+		viewport.set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
+		if event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+			_on_done()
+			viewport.set_input_as_handled()
+			return
+		if event.unicode >= 32:
+			_insert(String.chr(event.unicode))
+			viewport.set_input_as_handled()
+			return
 	if event is InputEventKey and event.pressed and event.keycode in [KEY_BACKSPACE, KEY_SHIFT]:
 		if event.keycode == KEY_BACKSPACE:
 			_on_backspace()
@@ -318,16 +414,28 @@ func get_panel_rect() -> Rect2:
 	return _panel.get_global_rect() if is_instance_valid(_panel) else Rect2()
 
 func _available_position() -> Vector2:
-	return (get_viewport_rect().size - _panel.size - Vector2.ONE * PANEL_GAP * 2).max(Vector2.ZERO)
+	return (get_viewport_rect().size - _panel.size * _panel.scale - Vector2.ONE * PANEL_GAP * 2).max(Vector2.ZERO)
 
 func _restore_position() -> void:
-	if not is_instance_valid(_panel):
+	if not is_inside_tree() or not is_instance_valid(_panel):
 		return
 	_panel.size = _panel.get_combined_minimum_size()
+	var room := (get_viewport_rect().size - Vector2.ONE * PANEL_GAP * 2).max(Vector2.ONE)
+	_panel.scale = Vector2.ONE * minf(1.0, minf(room.x / _panel.size.x, room.y / _panel.size.y))
 	_panel.position = Vector2.ONE * PANEL_GAP + _available_position() * _saved_position.clamp(Vector2.ZERO, Vector2.ONE)
+	if floating_window:
+		_panel.position = Vector2.ONE * PANEL_GAP
 	panel_moved.emit(get_panel_rect())
 
+func _drag_panel(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		_dragging = event.pressed
+		_panel.accept_event()
+
 func move_panel(amount: Vector2) -> void:
+	if floating_window:
+		window_move_requested.emit(amount)
+		return
 	var available := _available_position()
 	_panel.position = (_panel.position + amount).clamp(Vector2.ONE * PANEL_GAP, available + Vector2.ONE * PANEL_GAP)
 	_saved_position = Vector2(

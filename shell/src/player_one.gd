@@ -98,9 +98,9 @@ func _consider(candidate: int) -> void:
 		return
 
 	if device >= 0:
-		# Player one is live. A second pad is not an error and is not player two
-		# either -- Phase 0 is a single-player appliance and the extra device is
-		# simply ignored (see _input).
+		# Player one owns shell navigation. The Linux broker assigns additional
+		# physical pads to separate application slots; their ordinary buttons
+		# must not move shell focus.
 		ShellLog.info("ignoring extra controller on index %d (%s)"
 			% [candidate, Input.get_joy_name(candidate)])
 		return
@@ -196,7 +196,8 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventJoypadButton or event is InputEventJoypadMotion):
 		return
 	if ControllerRouter.is_active():
-		if event.device != ControllerRouter.DEVICE or device < 0:
+		var reserved_home: bool = event is InputEventJoypadButton and event.button_index == JOY_BUTTON_GUIDE
+		if event.device != ControllerRouter.DEVICE or (device < 0 and not reserved_home):
 			get_viewport().set_input_as_handled()
 		return
 

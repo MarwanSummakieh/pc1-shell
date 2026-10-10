@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 // MOWSER -- the appliance's browser, which is an ENGINE AND NOTHING ELSE.
 //
 // WHAT THIS IS, stated once here because every file below assumes it. Chromium's
@@ -107,6 +109,11 @@ std::string install_root();
 // the nodes only say "I need this up" and "I am done with it".
 class Runtime {
 public:
+    // Extension packages are selected by the shell before the process-wide
+    // engine starts. Changes after initialization take effect next session.
+    static bool set_extension_paths(const std::vector<std::string> &paths,
+                                    const std::string &root);
+    static const std::vector<std::string> &extension_paths();
     // Brings CEF up if it is not already, and says whether the engine is
     // usable. False is a normal answer on a machine whose image is missing
     // the payload; every caller draws something honest instead of crashing.
